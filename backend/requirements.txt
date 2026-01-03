@@ -1,0 +1,11 @@
+# LangChain packages for LLM providers
+langchain-core>=0.3.0
+langchain-google-genai>=2.0.0  # For Google Gemini
+langchain-groq>=0.2.0          # For Groq
+langchain-cerebras>=0.1.0      # For Cerebras
+
+# Environment variable management
+python-dotenv>=1.0.0
+
+# Optional: For accurate token counting
+tiktoken>=0.5.0
