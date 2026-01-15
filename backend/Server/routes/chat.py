@@ -20,6 +20,7 @@ from ChatServer import (
     get_chat_service,
     AllProvidersFailedError,
 )
+from ChatServer.services.chat_service import AllKeysFailedError
 from ..models.schemas import (
     ChatRequest,
     ChatResponse,
@@ -99,21 +100,34 @@ async def chat(request: ChatRequest) -> ChatResponse:
             session,
             provider=provider,
             fallback=request.fallback,
+            model=request.model,
         )
         
         # Get current provider info
         service = get_chat_service()
         current_provider = service.get_current_provider()
         
+        # Use model from response or default model
+        model_used = request.model if request.model else current_provider.default_model
+        
         return ChatResponse(
             content=response.content,
             provider=current_provider.provider.value.lower(),
-            model=current_provider.model,
+            model=model_used,
             tokens=TokenUsage(
                 prompt_tokens=response.prompt_tokens,
                 completion_tokens=response.completion_tokens,
                 total_tokens=response.total_tokens,
             ),
+        )
+    except AllKeysFailedError as e:
+        logger.error(f"All API keys failed for model {e.model}: {e.errors}")
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": f"All API keys failed for {e.provider} with model {e.model}",
+                "details": e.errors,
+            },
         )
     except AllProvidersFailedError as e:
         logger.error(f"All providers failed: {e.errors}")
@@ -160,6 +174,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 session,
                 provider=provider,
                 fallback=request.fallback,
+                model=request.model,
             ):
                 # Send as Server-Sent Events format
                 data = json.dumps({"content": chunk, "done": False})
@@ -168,6 +183,13 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
             # Send final message
             yield f"data: {json.dumps({'content': '', 'done': True})}\n\n"
             
+        except AllKeysFailedError as e:
+            error_data = json.dumps({
+                "error": f"All API keys failed for {e.provider} with model {e.model}",
+                "details": e.errors,
+                "done": True,
+            })
+            yield f"data: {error_data}\n\n"
         except AllProvidersFailedError as e:
             error_data = json.dumps({
                 "error": "All providers failed",
@@ -223,6 +245,7 @@ async def websocket_chat(websocket: WebSocket):
                     session,
                     provider=provider,
                     fallback=request.fallback,
+                    model=request.model,
                 ):
                     await websocket.send_json({
                         "type": "chunk",
@@ -235,6 +258,12 @@ async def websocket_chat(websocket: WebSocket):
                     "content": "",
                 })
                 
+            except AllKeysFailedError as e:
+                await websocket.send_json({
+                    "type": "error",
+                    "error": f"All API keys failed for {e.provider} with model {e.model}",
+                    "details": e.errors,
+                })
             except AllProvidersFailedError as e:
                 await websocket.send_json({
                     "type": "error",

@@ -184,5 +184,3 @@ class GroqLLM(BaseLLM):
         async for chunk in self._client.astream(messages):
             if chunk.content:
                 yield chunk.content
-            if chunk.choices and chunk.choices[0].delta.content:
-                yield chunk.choices[0].delta.content

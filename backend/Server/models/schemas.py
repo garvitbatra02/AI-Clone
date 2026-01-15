@@ -47,6 +47,11 @@ class ChatRequest(BaseModel):
         default=None,
         description="Specific provider to use (skips rotation if provided)"
     )
+    model: Optional[str] = Field(
+        default=None,
+        description="Optional specific model name. If None, uses default models with provider rotation. "
+                    "If specified, uses key-level fallback for that model."
+    )
     fallback: bool = Field(
         default=True,
         description="If True, automatically try next providers on failure"

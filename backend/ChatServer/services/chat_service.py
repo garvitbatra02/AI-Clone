@@ -25,6 +25,7 @@ from enum import Enum
 import threading
 
 from ..llm.base import BaseLLM, LLMConfig, LLMResponse, LLMProvider
+from ..llm.model_registry import get_provider_for_model
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -41,33 +42,66 @@ class AllProvidersFailedError(Exception):
         self.errors = errors
         provider_errors = "; ".join([f"{k}: {v}" for k, v in errors.items()])
         super().__init__(f"All providers failed. Errors: {provider_errors}")
+
+
+class AllKeysFailedError(Exception):
+    """
+    Raised when all API keys for a specific model fail.
+    
+    Attributes:
+        provider: The provider that was being used.
+        model: The model that was requested.
+        errors: Dictionary mapping key indices to their error messages.
+    """
+    def __init__(self, provider: str, model: str, errors: dict[int, str]):
+        self.provider = provider
+        self.model = model
+        self.errors = errors
+        key_errors = "; ".join([f"key_{k}: {v}" for k, v in errors.items()])
+        super().__init__(
+            f"All API keys failed for {provider} with model {model}. Errors: {key_errors}"
+        )
+
+
 from ..llm.factory import LLMFactory
+from ..llm.api_key_manager import get_api_key_manager
 from ..session.chat_session import ChatSession
 
 
 @dataclass
 class ProviderConfig:
-    """Configuration for an LLM provider."""
+    """Configuration for an LLM provider with multiple API keys."""
     provider: LLMProvider
-    model: str
-    api_key_env: str  # Environment variable name for API key
+    default_model: str
+    api_keys_env: str  # Environment variable name for comma-separated API keys
     
-    def get_api_key(self) -> str:
-        """Get API key from environment variable."""
-        return os.getenv(self.api_key_env, "")
+    def get_api_keys(self) -> list[str]:
+        """Get list of API keys from environment variable (comma-separated).
+        
+        Returns:
+            List of API keys. Empty list if env var not set.
+            
+        Example:
+            GROQ_API_KEYS="key1,key2,key3" -> ["key1", "key2", "key3"]
+        """
+        api_key_manager = get_api_key_manager()
+        return api_key_manager.get_api_keys(self.provider, self.api_keys_env)
 
 
 # Default provider configurations for rotation
+# Environment variables should contain comma-separated API keys:
+# GROQ_API_KEYS="key1,key2,key3"
+# CEREBRAS_API_KEYS="key1,key2,key3"
 DEFAULT_PROVIDERS = [
     ProviderConfig(
         provider=LLMProvider.GROQ,
-        model="llama-3.3-70b-versatile",
-        api_key_env="GROQ_API_KEY",
+        default_model="llama-3.3-70b-versatile",
+        api_keys_env="GROQ_API_KEYS",
     ),
     ProviderConfig(
         provider=LLMProvider.CEREBRAS,
-        model="llama-3.3-70b",
-        api_key_env="CEREBRAS_API_KEY",
+        default_model="llama-3.3-70b",
+        api_keys_env="CEREBRAS_API_KEYS",
     ),
 ]
 
@@ -109,18 +143,23 @@ class ChatService:
         self._temperature = temperature
         self._max_tokens = max_tokens
         
-        # Cache for initialized LLM instances (provider -> LLM instance)
-        self._llm_cache: dict[LLMProvider, BaseLLM] = {}
+        # Cache for initialized LLM instances (provider, key_index) -> LLM instance
+        # Only caches default models, specific models created on-demand
+        self._llm_cache: dict[tuple[LLMProvider, int], BaseLLM] = {}
         
         # Current provider index for rotation
         self._current_index = 0
         
         # Thread lock for thread-safe rotation
         self._lock = threading.Lock()
+        
+        # API key manager
+        self._api_key_manager = get_api_key_manager()
     
     def _get_or_create_llm(self, config: ProviderConfig) -> BaseLLM:
         """
-        Get cached LLM instance or create a new one.
+        Get cached LLM instance for default model or create a new one.
+        Uses round-robin key rotation for the default model.
         
         Args:
             config: Provider configuration.
@@ -128,17 +167,51 @@ class ChatService:
         Returns:
             Initialized LLM instance.
         """
-        if config.provider not in self._llm_cache:
+        # Get next key index for this provider
+        key_index = self._api_key_manager.get_next_key_index(config.provider)
+        
+        # Check cache
+        cache_key = (config.provider, key_index)
+        if cache_key not in self._llm_cache:
+            api_key = self._api_key_manager.get_key_by_index(
+                config.provider, key_index, config.api_keys_env
+            )
             llm = LLMFactory.create(
                 provider=config.provider,
-                model=config.model,
-                api_key=config.get_api_key(),
+                model=config.default_model,
+                api_key=api_key,
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
             )
-            self._llm_cache[config.provider] = llm
+            self._llm_cache[cache_key] = llm
         
-        return self._llm_cache[config.provider]
+        return self._llm_cache[cache_key]
+    
+    def _create_llm_with_key(
+        self, 
+        provider: LLMProvider, 
+        model: str, 
+        api_key: str
+    ) -> BaseLLM:
+        """
+        Create a new LLM instance with a specific API key.
+        Does NOT cache - used for specific model requests.
+        
+        Args:
+            provider: LLM provider.
+            model: Model name.
+            api_key: API key to use.
+            
+        Returns:
+            Initialized LLM instance.
+        """
+        return LLMFactory.create(
+            provider=provider,
+            model=model,
+            api_key=api_key,
+            temperature=self._temperature,
+            max_tokens=self._max_tokens,
+        )
     
     def _get_next_provider(self) -> ProviderConfig:
         """
@@ -167,23 +240,42 @@ class ChatService:
         session: ChatSession,
         provider: Optional[LLMProvider] = None,
         fallback: bool = False,
+        model: Optional[str] = None,
     ) -> LLMResponse:
         """
         Send a chat request and get a response.
         
-        If provider is not specified, uses the next provider in rotation.
+        Two execution paths:
+        - Path A (model=None): Uses default models with provider rotation and caching
+        - Path B (model specified): Uses specific model with key-level fallback, no provider switching
         
         Args:
             session: Chat session with conversation history.
             provider: Optional specific provider to use (skips rotation).
-            fallback: If True, automatically try next providers on failure.
+            fallback: If True, automatically try next providers/keys on failure.
+            model: Optional specific model name. If None, uses default models.
             
         Returns:
             LLM response with content and token usage.
             
         Raises:
-            AllProvidersFailedError: If fallback=True and all providers fail.
+            AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+            AllKeysFailedError: If fallback=True, model specified, and all keys fail.
         """
+        # Path B: Specific model with key-level fallback
+        if model is not None:
+            # Auto-detect provider from model name using MODEL_REGISTRY
+            if not provider:
+                detected_provider = get_provider_for_model(model)
+                if detected_provider is None:
+                    raise ValueError(
+                        f"Model '{model}' not found in MODEL_REGISTRY. "
+                        f"Available models can be found in ChatServer/llm/model_registry.py"
+                    )
+                provider = detected_provider
+            return self._chat_with_specific_model(session, provider, model, fallback)
+        
+        # Path A: Default model with provider rotation
         if fallback and not provider:
             return self._chat_with_fallback(session)
         
@@ -244,26 +336,112 @@ class ChatService:
         logger.error(f"All {len(self._providers)} providers failed")
         raise AllProvidersFailedError(errors)
     
+    def _chat_with_specific_model(
+        self,
+        session: ChatSession,
+        provider: LLMProvider,
+        model: str,
+        fallback: bool = False,
+    ) -> LLMResponse:
+        """
+        Chat with a specific model using key-level fallback.
+        
+        Tries all API keys for the given provider and model.
+        Does NOT switch providers - only tries different API keys.
+        
+        Args:
+            session: Chat session with conversation history.
+            provider: The provider to use.
+            model: The specific model name.
+            fallback: If True, try all API keys before failing.
+            
+        Returns:
+            LLM response from the first successful key.
+            
+        Raises:
+            AllKeysFailedError: If fallback=True and all keys fail.
+            Exception: If fallback=False and the first key fails.
+        """
+        config = next(
+            (p for p in self._providers if p.provider == provider),
+            self._providers[0]
+        )
+        
+        api_keys = config.get_api_keys()
+        if not api_keys:
+            raise ValueError(f"No API keys configured for {provider.value}")
+        
+        if not fallback:
+            # Try only first key
+            api_key = api_keys[0]
+            llm = self._create_llm_with_key(provider, model, api_key)
+            return llm.chat(session)
+        
+        # Try all keys with fallback
+        errors: dict[int, str] = {}
+        for key_index, api_key in enumerate(api_keys):
+            try:
+                llm = self._create_llm_with_key(provider, model, api_key)
+                response = llm.chat(session)
+                logger.info(
+                    f"Successfully served request using {provider.value} "
+                    f"with model {model} (key index {key_index})"
+                )
+                return response
+            except Exception as e:
+                error_msg = str(e)
+                errors[key_index] = error_msg
+                logger.warning(
+                    f"Key {key_index} for {provider.value} failed: {error_msg}. "
+                    f"Trying next key..."
+                )
+        
+        # All keys failed
+        logger.error(f"All {len(api_keys)} keys failed for {provider.value} with model {model}")
+        raise AllKeysFailedError(provider.value, model, errors)
+    
     def chat_stream(
         self,
         session: ChatSession,
         provider: Optional[LLMProvider] = None,
         fallback: bool = False,
+        model: Optional[str] = None,
     ) -> Iterator[str]:
         """
         Send a chat request and stream the response.
         
+        Two execution paths:
+        - Path A (model=None): Uses default models with provider rotation and caching
+        - Path B (model specified): Uses specific model with key-level fallback
+        
         Args:
             session: Chat session with conversation history.
             provider: Optional specific provider to use (skips rotation).
-            fallback: If True, automatically try next providers on failure.
+            fallback: If True, automatically try next providers/keys on failure.
+            model: Optional specific model name. If None, uses default models.
             
         Yields:
             Response chunks as they arrive.
             
         Raises:
-            AllProvidersFailedError: If fallback=True and all providers fail.
+            AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+            AllKeysFailedError: If fallback=True, model specified, and all keys fail.
         """
+        # Path B: Specific model with key-level fallback
+        if model is not None:
+            # Auto-detect provider from model name using MODEL_REGISTRY
+            if not provider:
+                detected_provider = get_provider_for_model(model)
+                if detected_provider is None:
+                    raise ValueError(
+                        f"Model '{model}' not found in MODEL_REGISTRY. "
+                        f"Available models can be found in ChatServer/llm/model_registry.py"
+                    )
+                provider = detected_provider
+            yield from self._chat_stream_with_specific_model(session, provider, model, fallback)
+            return
+        
+        # Path A: Default model with provider rotation
         if fallback and not provider:
             yield from self._chat_stream_with_fallback(session)
             return
@@ -323,26 +501,116 @@ class ChatService:
         logger.error(f"All {len(self._providers)} providers failed for streaming")
         raise AllProvidersFailedError(errors)
     
+    def _chat_stream_with_specific_model(
+        self,
+        session: ChatSession,
+        provider: LLMProvider,
+        model: str,
+        fallback: bool = False,
+    ) -> Iterator[str]:
+        """
+        Stream chat with a specific model using key-level fallback.
+        
+        Tries all API keys for the given provider and model.
+        Tests first chunk before committing to prevent mid-stream errors.
+        
+        Args:
+            session: Chat session with conversation history.
+            provider: The provider to use.
+            model: The specific model name.
+            fallback: If True, try all API keys before failing.
+            
+        Yields:
+            Response chunks from the first successful key.
+            
+        Raises:
+            AllKeysFailedError: If fallback=True and all keys fail.
+            Exception: If fallback=False and the first key fails.
+        """
+        config = next(
+            (p for p in self._providers if p.provider == provider),
+            self._providers[0]
+        )
+        
+        api_keys = config.get_api_keys()
+        if not api_keys:
+            raise ValueError(f"No API keys configured for {provider.value}")
+        
+        if not fallback:
+            # Try only first key
+            api_key = api_keys[0]
+            llm = self._create_llm_with_key(provider, model, api_key)
+            yield from llm.chat_stream(session)
+            return
+        
+        # Try all keys with fallback
+        errors: dict[int, str] = {}
+        for key_index, api_key in enumerate(api_keys):
+            try:
+                llm = self._create_llm_with_key(provider, model, api_key)
+                # Test first chunk before committing
+                stream = llm.chat_stream(session)
+                first_chunk = next(stream)
+                logger.info(
+                    f"Successfully streaming using {provider.value} "
+                    f"with model {model} (key index {key_index})"
+                )
+                yield first_chunk
+                yield from stream
+                return
+            except Exception as e:
+                error_msg = str(e)
+                errors[key_index] = error_msg
+                logger.warning(
+                    f"Key {key_index} for {provider.value} failed: {error_msg}. "
+                    f"Trying next key..."
+                )
+        
+        # All keys failed
+        logger.error(f"All {len(api_keys)} keys failed for streaming {provider.value} with model {model}")
+        raise AllKeysFailedError(provider.value, model, errors)
+    
     async def chat_async(
         self,
         session: ChatSession,
         provider: Optional[LLMProvider] = None,
         fallback: bool = False,
+        model: Optional[str] = None,
     ) -> LLMResponse:
         """
         Send an async chat request and get a response.
         
+        Two execution paths:
+        - Path A (model=None): Uses default models with provider rotation and caching
+        - Path B (model specified): Uses specific model with key-level fallback
+        
         Args:
             session: Chat session with conversation history.
             provider: Optional specific provider to use (skips rotation).
-            fallback: If True, automatically try next providers on failure.
+            fallback: If True, automatically try next providers/keys on failure.
+            model: Optional specific model name. If None, uses default models.
             
         Returns:
             LLM response with content and token usage.
             
         Raises:
-            AllProvidersFailedError: If fallback=True and all providers fail.
+            AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+            AllKeysFailedError: If fallback=True, model specified, and all keys fail.
         """
+        # Path B: Specific model with key-level fallback
+        if model is not None:
+            # Auto-detect provider from model name using MODEL_REGISTRY
+            if not provider:
+                detected_provider = get_provider_for_model(model)
+                if detected_provider is None:
+                    raise ValueError(
+                        f"Model '{model}' not found in MODEL_REGISTRY. "
+                        f"Available models can be found in ChatServer/llm/model_registry.py"
+                    )
+                provider = detected_provider
+            return await self._chat_async_with_specific_model(session, provider, model, fallback)
+        
+        # Path A: Default model with provider rotation
         if fallback and not provider:
             return await self._chat_async_with_fallback(session)
         
@@ -397,26 +665,112 @@ class ChatService:
         logger.error(f"All {len(self._providers)} providers failed for async")
         raise AllProvidersFailedError(errors)
     
+    async def _chat_async_with_specific_model(
+        self,
+        session: ChatSession,
+        provider: LLMProvider,
+        model: str,
+        fallback: bool = False,
+    ) -> LLMResponse:
+        """
+        Async chat with a specific model using key-level fallback.
+        
+        Tries all API keys for the given provider and model.
+        
+        Args:
+            session: Chat session with conversation history.
+            provider: The provider to use.
+            model: The specific model name.
+            fallback: If True, try all API keys before failing.
+            
+        Returns:
+            LLM response from the first successful key.
+            
+        Raises:
+            AllKeysFailedError: If fallback=True and all keys fail.
+            Exception: If fallback=False and the first key fails.
+        """
+        config = next(
+            (p for p in self._providers if p.provider == provider),
+            self._providers[0]
+        )
+        
+        api_keys = config.get_api_keys()
+        if not api_keys:
+            raise ValueError(f"No API keys configured for {provider.value}")
+        
+        if not fallback:
+            # Try only first key
+            api_key = api_keys[0]
+            llm = self._create_llm_with_key(provider, model, api_key)
+            return await llm.chat_async(session)
+        
+        # Try all keys with fallback
+        errors: dict[int, str] = {}
+        for key_index, api_key in enumerate(api_keys):
+            try:
+                llm = self._create_llm_with_key(provider, model, api_key)
+                response = await llm.chat_async(session)
+                logger.info(
+                    f"Successfully served async request using {provider.value} "
+                    f"with model {model} (key index {key_index})"
+                )
+                return response
+            except Exception as e:
+                error_msg = str(e)
+                errors[key_index] = error_msg
+                logger.warning(
+                    f"Key {key_index} for {provider.value} failed: {error_msg}. "
+                    f"Trying next key..."
+                )
+        
+        # All keys failed
+        logger.error(f"All {len(api_keys)} keys failed for async {provider.value} with model {model}")
+        raise AllKeysFailedError(provider.value, model, errors)
+    
     async def chat_stream_async(
         self,
         session: ChatSession,
         provider: Optional[LLMProvider] = None,
         fallback: bool = False,
+        model: Optional[str] = None,
     ) -> AsyncIterator[str]:
         """
         Send an async chat request and stream the response.
         
+        Two execution paths:
+        - Path A (model=None): Uses default models with provider rotation and caching
+        - Path B (model specified): Uses specific model with key-level fallback
+        
         Args:
             session: Chat session with conversation history.
             provider: Optional specific provider to use (skips rotation).
-            fallback: If True, automatically try next providers on failure.
+            fallback: If True, automatically try next providers/keys on failure.
+            model: Optional specific model name. If None, uses default models.
             
         Yields:
             Response chunks as they arrive.
             
         Raises:
-            AllProvidersFailedError: If fallback=True and all providers fail.
+            AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+            AllKeysFailedError: If fallback=True, model specified, and all keys fail.
         """
+        # Path B: Specific model with key-level fallback
+        if model is not None:
+            # Auto-detect provider from model name using MODEL_REGISTRY
+            if not provider:
+                detected_provider = get_provider_for_model(model)
+                if detected_provider is None:
+                    raise ValueError(
+                        f"Model '{model}' not found in MODEL_REGISTRY. "
+                        f"Available models can be found in ChatServer/llm/model_registry.py"
+                    )
+                provider = detected_provider
+            async for chunk in self._chat_stream_async_with_specific_model(session, provider, model, fallback):
+                yield chunk
+            return
+        
+        # Path A: Default model with provider rotation
         if fallback and not provider:
             async for chunk in self._chat_stream_async_with_fallback(session):
                 yield chunk
@@ -480,6 +834,77 @@ class ChatService:
         
         logger.error(f"All {len(self._providers)} providers failed for async streaming")
         raise AllProvidersFailedError(errors)
+    
+    async def _chat_stream_async_with_specific_model(
+        self,
+        session: ChatSession,
+        provider: LLMProvider,
+        model: str,
+        fallback: bool = False,
+    ) -> AsyncIterator[str]:
+        """
+        Async stream chat with a specific model using key-level fallback.
+        
+        Tries all API keys for the given provider and model.
+        Tests first chunk before committing to prevent mid-stream errors.
+        
+        Args:
+            session: Chat session with conversation history.
+            provider: The provider to use.
+            model: The specific model name.
+            fallback: If True, try all API keys before failing.
+            
+        Yields:
+            Response chunks from the first successful key.
+            
+        Raises:
+            AllKeysFailedError: If fallback=True and all keys fail.
+            Exception: If fallback=False and the first key fails.
+        """
+        config = next(
+            (p for p in self._providers if p.provider == provider),
+            self._providers[0]
+        )
+        
+        api_keys = config.get_api_keys()
+        if not api_keys:
+            raise ValueError(f"No API keys configured for {provider.value}")
+        
+        if not fallback:
+            # Try only first key
+            api_key = api_keys[0]
+            llm = self._create_llm_with_key(provider, model, api_key)
+            async for chunk in llm.chat_stream_async(session):
+                yield chunk
+            return
+        
+        # Try all keys with fallback
+        errors: dict[int, str] = {}
+        for key_index, api_key in enumerate(api_keys):
+            try:
+                llm = self._create_llm_with_key(provider, model, api_key)
+                stream = llm.chat_stream_async(session)
+                # Test first chunk before committing
+                first_chunk = await stream.__anext__()
+                logger.info(
+                    f"Successfully streaming async using {provider.value} "
+                    f"with model {model} (key index {key_index})"
+                )
+                yield first_chunk
+                async for chunk in stream:
+                    yield chunk
+                return
+            except Exception as e:
+                error_msg = str(e)
+                errors[key_index] = error_msg
+                logger.warning(
+                    f"Key {key_index} for {provider.value} failed: {error_msg}. "
+                    f"Trying next key..."
+                )
+        
+        # All keys failed
+        logger.error(f"All {len(api_keys)} keys failed for async streaming {provider.value} with model {model}")
+        raise AllKeysFailedError(provider.value, model, errors)
     
     def add_provider(self, config: ProviderConfig) -> None:
         """
@@ -562,6 +987,7 @@ def chat_inference(
     session: ChatSession,
     provider: Optional[LLMProvider] = None,
     fallback: bool = True,
+    model: Optional[str] = None,
 ) -> LLMResponse:
     """
     Simple function to perform chat inference using the global service.
@@ -572,14 +998,16 @@ def chat_inference(
     Args:
         session: Chat session with conversation history.
         provider: Optional specific provider (skips rotation if provided).
-        fallback: If True (default), automatically tries next providers on failure.
+        fallback: If True (default), automatically tries next providers/keys on failure.
                   Tries all providers once before raising an error.
+        model: Optional specific model name. If None, uses default models.
         
     Returns:
         LLM response with content and token usage.
         
     Raises:
-        AllProvidersFailedError: If fallback=True and all providers fail.
+        AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+        AllKeysFailedError: If fallback=True, model specified, and all keys fail.
         
     Example:
         from ChatServer.services import chat_inference
@@ -588,22 +1016,23 @@ def chat_inference(
         session = ChatSession()
         session.add_user_message("Hello!")
         
-        # With fallback (default) - tries all providers before failing
+        # Default model with fallback - tries all providers
         response = chat_inference(session)
         
-        # Without fallback - fails immediately on error
-        response = chat_inference(session, fallback=False)
+        # Specific model with fallback - tries all API keys
+        response = chat_inference(session, model="llama-3.1-8b-instant")
         
         print(response.content)
     """
     service = get_chat_service()
-    return service.chat(session, provider=provider, fallback=fallback)
+    return service.chat(session, provider=provider, fallback=fallback, model=model)
 
 
 def chat_inference_stream(
     session: ChatSession,
     provider: Optional[LLMProvider] = None,
     fallback: bool = True,
+    model: Optional[str] = None,
 ) -> Iterator[str]:
     """
     Stream chat inference using the global service.
@@ -611,22 +1040,25 @@ def chat_inference_stream(
     Args:
         session: Chat session with conversation history.
         provider: Optional specific provider (skips rotation if provided).
-        fallback: If True (default), automatically tries next providers on failure.
+        fallback: If True (default), automatically tries next providers/keys on failure.
+        model: Optional specific model name. If None, uses default models.
         
     Yields:
         Response chunks as they arrive.
         
     Raises:
-        AllProvidersFailedError: If fallback=True and all providers fail.
+        AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+        AllKeysFailedError: If fallback=True, model specified, and all keys fail.
     """
     service = get_chat_service()
-    yield from service.chat_stream(session, provider=provider, fallback=fallback)
+    yield from service.chat_stream(session, provider=provider, fallback=fallback, model=model)
 
 
 async def chat_inference_async(
     session: ChatSession,
     provider: Optional[LLMProvider] = None,
     fallback: bool = True,
+    model: Optional[str] = None,
 ) -> LLMResponse:
     """
     Async chat inference using the global service.
@@ -634,22 +1066,25 @@ async def chat_inference_async(
     Args:
         session: Chat session with conversation history.
         provider: Optional specific provider (skips rotation if provided).
-        fallback: If True (default), automatically tries next providers on failure.
+        fallback: If True (default), automatically tries next providers/keys on failure.
+        model: Optional specific model name. If None, uses default models.
         
     Returns:
         LLM response with content and token usage.
         
     Raises:
-        AllProvidersFailedError: If fallback=True and all providers fail.
+        AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+        AllKeysFailedError: If fallback=True, model specified, and all keys fail.
     """
     service = get_chat_service()
-    return await service.chat_async(session, provider=provider, fallback=fallback)
+    return await service.chat_async(session, provider=provider, fallback=fallback, model=model)
 
 
 async def chat_inference_stream_async(
     session: ChatSession,
     provider: Optional[LLMProvider] = None,
     fallback: bool = True,
+    model: Optional[str] = None,
 ) -> AsyncIterator[str]:
     """
     Async streaming chat inference using the global service.
@@ -657,14 +1092,16 @@ async def chat_inference_stream_async(
     Args:
         session: Chat session with conversation history.
         provider: Optional specific provider (skips rotation if provided).
-        fallback: If True (default), automatically tries next providers on failure.
+        fallback: If True (default), automatically tries next providers/keys on failure.
+        model: Optional specific model name. If None, uses default models.
         
     Yields:
         Response chunks as they arrive.
         
     Raises:
-        AllProvidersFailedError: If fallback=True and all providers fail.
+        AllProvidersFailedError: If fallback=True, model=None, and all providers fail.
+        AllKeysFailedError: If fallback=True, model specified, and all keys fail.
     """
     service = get_chat_service()
-    async for chunk in service.chat_stream_async(session, provider=provider, fallback=fallback):
+    async for chunk in service.chat_stream_async(session, provider=provider, fallback=fallback, model=model):
         yield chunk
