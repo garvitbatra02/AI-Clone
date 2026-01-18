@@ -123,6 +123,7 @@ class GroqLLM(BaseLLM):
         return LLMResponse(
             content=response.content,
             model=self.config.model,
+            provider=self.provider.value,
             finish_reason=finish_reason,
             usage=self._extract_usage(response),
             raw_response=response,
@@ -148,6 +149,7 @@ class GroqLLM(BaseLLM):
         return LLMResponse(
             content=response.content,
             model=self.config.model,
+            provider=self.provider.value,
             finish_reason=finish_reason,
             usage=self._extract_usage(response),
             raw_response=response,

@@ -55,12 +55,14 @@ class LLMResponse:
     Attributes:
         content: The generated text content
         model: The model that generated the response
+        provider: The provider that generated the response (e.g., 'groq', 'cerebras')
         finish_reason: Why the generation stopped (e.g., 'stop', 'length')
         usage: Token usage information
         raw_response: The original response from the provider
     """
     content: str
     model: str
+    provider: Optional[str] = None
     finish_reason: Optional[str] = None
     usage: Optional[dict[str, int]] = None
     raw_response: Optional[Any] = None

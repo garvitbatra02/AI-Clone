@@ -112,8 +112,8 @@ async def chat(request: ChatRequest) -> ChatResponse:
         
         return ChatResponse(
             content=response.content,
-            provider=current_provider.provider.value.lower(),
-            model=model_used,
+            provider=response.provider or current_provider.provider.value.lower(),
+            model=response.model,
             tokens=TokenUsage(
                 prompt_tokens=response.prompt_tokens,
                 completion_tokens=response.completion_tokens,
