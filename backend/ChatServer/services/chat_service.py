@@ -155,6 +155,23 @@ class ChatService:
         
         # API key manager
         self._api_key_manager = get_api_key_manager()
+        
+        # Retry configuration
+        self._max_retries_on_empty = 2  # Retry up to 2 times if response is empty
+    
+    def _is_response_empty(self, response: LLMResponse) -> bool:
+        """
+        Check if response content is empty or just whitespace.
+        
+        Args:
+            response: The LLM response to check
+            
+        Returns:
+            True if response is empty or only whitespace, False otherwise
+        """
+        if not response or not response.content:
+            return True
+        return response.content.strip() == ""
     
     def _get_or_create_llm(self, config: ProviderConfig) -> BaseLLM:
         """
@@ -296,44 +313,91 @@ class ChatService:
         """
         Try chat with automatic fallback to next providers on failure.
         
-        Tries each provider once until one succeeds or all fail.
+        For each provider, tries ALL API keys before moving to next provider.
+        Retries entire provider chain if all responses are empty.
         
         Args:
             session: Chat session with conversation history.
             
         Returns:
-            LLM response from the first successful provider.
+            LLM response from the first successful provider/key.
             
         Raises:
-            AllProvidersFailedError: If all providers fail.
+            AllProvidersFailedError: If all providers and all keys fail.
         """
-        errors: dict[str, str] = {}
-        tried_providers: set[LLMProvider] = set()
-        
-        while len(tried_providers) < len(self._providers):
-            config = self._get_next_provider()
+        for retry_attempt in range(self._max_retries_on_empty + 1):
+            errors: dict[str, str] = {}
+            tried_providers: set[LLMProvider] = set()
             
-            # Skip if already tried
-            if config.provider in tried_providers:
-                continue
+            if retry_attempt > 0:
+                logger.info(f"Retrying entire provider chain (attempt {retry_attempt + 1}/{self._max_retries_on_empty + 1})...")
             
-            tried_providers.add(config.provider)
-            
-            try:
-                llm = self._get_or_create_llm(config)
-                response = llm.chat(session)
-                logger.info(f"Successfully served request using {config.provider.value}")
-                return response
-            except Exception as e:
-                error_msg = str(e)
-                errors[config.provider.value] = error_msg
+            while len(tried_providers) < len(self._providers):
+                config = self._get_next_provider()
+                
+                # Skip if already tried
+                if config.provider in tried_providers:
+                    continue
+                
+                tried_providers.add(config.provider)
+                
+                # Try ALL keys for this provider before moving to next
+                api_keys = config.get_api_keys()
+                if not api_keys:
+                    errors[config.provider.value] = "No API keys configured"
+                    logger.warning(f"No API keys configured for {config.provider.value}. Trying next provider...")
+                    continue
+                
+                key_errors: list[str] = []
+                provider_succeeded = False
+                
+                for key_index, api_key in enumerate(api_keys):
+                    try:
+                        llm = self._create_llm_with_key(
+                            config.provider, 
+                            config.default_model, 
+                            api_key
+                        )
+                        response = llm.chat(session)
+                        
+                        # Validate response is not empty
+                        if self._is_response_empty(response):
+                            logger.warning(
+                                f"Provider {config.provider.value} key {key_index} returned empty response "
+                                f"(attempt {retry_attempt + 1}). Trying next key..."
+                            )
+                            key_errors.append(f"key_{key_index}: Empty response")
+                            continue
+                        
+                        # Success - return response
+                        logger.info(
+                            f"Successfully served request using {config.provider.value} "
+                            f"key {key_index} (content length: {len(response.content)})"
+                        )
+                        return response
+                        
+                    except Exception as e:
+                        error_msg = str(e)
+                        key_errors.append(f"key_{key_index}: {error_msg}")
+                        logger.warning(
+                            f"Provider {config.provider.value} key {key_index} failed: {error_msg}. "
+                            f"Trying next key..."
+                        )
+                
+                # All keys for this provider failed
+                errors[config.provider.value] = "; ".join(key_errors)
                 logger.warning(
-                    f"Provider {config.provider.value} failed: {error_msg}. "
+                    f"All {len(api_keys)} keys for {config.provider.value} failed. "
                     f"Trying next provider..."
                 )
+            
+            # If this is not the last retry, try again with all providers
+            if retry_attempt < self._max_retries_on_empty:
+                logger.warning(f"All providers and keys failed. Retrying entire chain...")
+                continue
         
-        # All providers failed
-        logger.error(f"All {len(self._providers)} providers failed")
+        # All retries exhausted
+        logger.error(f"All {len(self._providers)} providers failed after {self._max_retries_on_empty + 1} retry attempts")
         raise AllProvidersFailedError(errors)
     
     def _chat_with_specific_model(
@@ -344,9 +408,10 @@ class ChatService:
         fallback: bool = False,
     ) -> LLMResponse:
         """
-        Chat with a specific model using key-level fallback.
+        Chat with a specific model using key-level fallback with retry on empty responses.
         
         Tries all API keys for the given provider and model.
+        Retries entire key chain if response is empty.
         Does NOT switch providers - only tries different API keys.
         
         Args:
@@ -377,27 +442,59 @@ class ChatService:
             llm = self._create_llm_with_key(provider, model, api_key)
             return llm.chat(session)
         
-        # Try all keys with fallback
-        errors: dict[int, str] = {}
-        for key_index, api_key in enumerate(api_keys):
-            try:
-                llm = self._create_llm_with_key(provider, model, api_key)
-                response = llm.chat(session)
+        # Try all keys with full retry on empty responses
+        for retry_attempt in range(self._max_retries_on_empty + 1):
+            errors: dict[int, str] = {}
+            
+            if retry_attempt > 0:
                 logger.info(
-                    f"Successfully served request using {provider.value} "
-                    f"with model {model} (key index {key_index})"
+                    f"Retrying all keys for {provider.value} with model {model} "
+                    f"(attempt {retry_attempt + 1}/{self._max_retries_on_empty + 1})..."
                 )
-                return response
-            except Exception as e:
-                error_msg = str(e)
-                errors[key_index] = error_msg
+            
+            for key_index, api_key in enumerate(api_keys):
+                try:
+                    llm = self._create_llm_with_key(provider, model, api_key)
+                    response = llm.chat(session)
+                    
+                    # Validate response is not empty
+                    if self._is_response_empty(response):
+                        logger.warning(
+                            f"Key {key_index} for {provider.value} returned empty response (attempt {retry_attempt + 1}). "
+                            f"Trying next key..."
+                        )
+                        error_msg = "Empty response from provider"
+                        errors[key_index] = error_msg
+                        continue
+                    
+                    # Success - return response
+                    logger.info(
+                        f"Successfully served request using {provider.value} "
+                        f"with model {model} (key index {key_index}, attempt {retry_attempt + 1})"
+                    )
+                    return response
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    errors[key_index] = error_msg
+                    logger.warning(
+                        f"Key {key_index} for {provider.value} failed: {error_msg}. "
+                        f"Trying next key..."
+                    )
+            
+            # If this is not the last retry, try again with all keys
+            if retry_attempt < self._max_retries_on_empty:
                 logger.warning(
-                    f"Key {key_index} for {provider.value} failed: {error_msg}. "
-                    f"Trying next key..."
+                    f"All keys for {provider.value} returned empty responses. "
+                    f"Retrying entire key chain..."
                 )
+                continue
         
-        # All keys failed
-        logger.error(f"All {len(api_keys)} keys failed for {provider.value} with model {model}")
+        # All retries exhausted
+        logger.error(
+            f"All {len(api_keys)} keys failed for {provider.value} with model {model} "
+            f"after {self._max_retries_on_empty + 1} retry attempts"
+        )
         raise AllKeysFailedError(provider.value, model, errors)
     
     def chat_stream(
@@ -461,14 +558,16 @@ class ChatService:
         """
         Try streaming chat with automatic fallback on failure.
         
+        For each provider, tries ALL API keys before moving to next provider.
+        
         Args:
             session: Chat session with conversation history.
             
         Yields:
-            Response chunks from the first successful provider.
+            Response chunks from the first successful provider/key.
             
         Raises:
-            AllProvidersFailedError: If all providers fail.
+            AllProvidersFailedError: If all providers and all keys fail.
         """
         errors: dict[str, str] = {}
         tried_providers: set[LLMProvider] = set()
@@ -481,22 +580,47 @@ class ChatService:
             
             tried_providers.add(config.provider)
             
-            try:
-                llm = self._get_or_create_llm(config)
-                # Try to get first chunk to verify connection works
-                stream = llm.chat_stream(session)
-                first_chunk = next(stream)
-                logger.info(f"Successfully streaming using {config.provider.value}")
-                yield first_chunk
-                yield from stream
-                return
-            except Exception as e:
-                error_msg = str(e)
-                errors[config.provider.value] = error_msg
-                logger.warning(
-                    f"Provider {config.provider.value} failed: {error_msg}. "
-                    f"Trying next provider..."
-                )
+            # Try ALL keys for this provider before moving to next
+            api_keys = config.get_api_keys()
+            if not api_keys:
+                errors[config.provider.value] = "No API keys configured"
+                logger.warning(f"No API keys configured for {config.provider.value}. Trying next provider...")
+                continue
+            
+            key_errors: list[str] = []
+            
+            for key_index, api_key in enumerate(api_keys):
+                try:
+                    llm = self._create_llm_with_key(
+                        config.provider, 
+                        config.default_model, 
+                        api_key
+                    )
+                    # Try to get first chunk to verify connection works
+                    stream = llm.chat_stream(session)
+                    first_chunk = next(stream)
+                    
+                    logger.info(
+                        f"Successfully streaming using {config.provider.value} key {key_index}"
+                    )
+                    yield first_chunk
+                    yield from stream
+                    return
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    key_errors.append(f"key_{key_index}: {error_msg}")
+                    logger.warning(
+                        f"Provider {config.provider.value} key {key_index} failed: {error_msg}. "
+                        f"Trying next key..."
+                    )
+            
+            # All keys for this provider failed
+            errors[config.provider.value] = "; ".join(key_errors)
+            logger.warning(
+                f"All {len(api_keys)} keys for {config.provider.value} failed for streaming. "
+                f"Trying next provider..."
+            )
         
         logger.error(f"All {len(self._providers)} providers failed for streaming")
         raise AllProvidersFailedError(errors)
@@ -629,40 +753,89 @@ class ChatService:
         """
         Try async chat with automatic fallback on failure.
         
+        For each provider, tries ALL API keys before moving to next provider.
+        Retries entire provider chain if all responses are empty.
+        
         Args:
             session: Chat session with conversation history.
             
         Returns:
-            LLM response from the first successful provider.
+            LLM response from the first successful provider/key.
             
         Raises:
-            AllProvidersFailedError: If all providers fail.
+            AllProvidersFailedError: If all providers and all keys fail.
         """
-        errors: dict[str, str] = {}
-        tried_providers: set[LLMProvider] = set()
-        
-        while len(tried_providers) < len(self._providers):
-            config = self._get_next_provider()
+        for retry_attempt in range(self._max_retries_on_empty + 1):
+            errors: dict[str, str] = {}
+            tried_providers: set[LLMProvider] = set()
             
-            if config.provider in tried_providers:
-                continue
+            if retry_attempt > 0:
+                logger.info(f"Retrying entire async provider chain (attempt {retry_attempt + 1}/{self._max_retries_on_empty + 1})...")
             
-            tried_providers.add(config.provider)
-            
-            try:
-                llm = self._get_or_create_llm(config)
-                response = await llm.chat_async(session)
-                logger.info(f"Successfully served async request using {config.provider.value}")
-                return response
-            except Exception as e:
-                error_msg = str(e)
-                errors[config.provider.value] = error_msg
+            while len(tried_providers) < len(self._providers):
+                config = self._get_next_provider()
+                
+                if config.provider in tried_providers:
+                    continue
+                
+                tried_providers.add(config.provider)
+                
+                # Try ALL keys for this provider before moving to next
+                api_keys = config.get_api_keys()
+                if not api_keys:
+                    errors[config.provider.value] = "No API keys configured"
+                    logger.warning(f"No API keys configured for {config.provider.value}. Trying next provider...")
+                    continue
+                
+                key_errors: list[str] = []
+                
+                for key_index, api_key in enumerate(api_keys):
+                    try:
+                        llm = self._create_llm_with_key(
+                            config.provider, 
+                            config.default_model, 
+                            api_key
+                        )
+                        response = await llm.chat_async(session)
+                        
+                        # Validate response is not empty
+                        if self._is_response_empty(response):
+                            logger.warning(
+                                f"Provider {config.provider.value} key {key_index} returned empty response "
+                                f"(attempt {retry_attempt + 1}). Trying next key..."
+                            )
+                            key_errors.append(f"key_{key_index}: Empty response")
+                            continue
+                        
+                        # Success - return response
+                        logger.info(
+                            f"Successfully served async request using {config.provider.value} "
+                            f"key {key_index} (content length: {len(response.content)})"
+                        )
+                        return response
+                        
+                    except Exception as e:
+                        error_msg = str(e)
+                        key_errors.append(f"key_{key_index}: {error_msg}")
+                        logger.warning(
+                            f"Provider {config.provider.value} key {key_index} failed: {error_msg}. "
+                            f"Trying next key..."
+                        )
+                
+                # All keys for this provider failed
+                errors[config.provider.value] = "; ".join(key_errors)
                 logger.warning(
-                    f"Provider {config.provider.value} failed: {error_msg}. "
+                    f"All {len(api_keys)} async keys for {config.provider.value} failed. "
                     f"Trying next provider..."
                 )
+            
+            # If this is not the last retry, try again with all providers
+            if retry_attempt < self._max_retries_on_empty:
+                logger.warning(f"All async providers and keys failed. Retrying entire chain...")
+                continue
         
-        logger.error(f"All {len(self._providers)} providers failed for async")
+        # All retries exhausted
+        logger.error(f"All {len(self._providers)} providers failed for async after {self._max_retries_on_empty + 1} retry attempts")
         raise AllProvidersFailedError(errors)
     
     async def _chat_async_with_specific_model(
@@ -673,9 +846,10 @@ class ChatService:
         fallback: bool = False,
     ) -> LLMResponse:
         """
-        Async chat with a specific model using key-level fallback.
+        Async chat with a specific model using key-level fallback with retry on empty responses.
         
         Tries all API keys for the given provider and model.
+        Retries entire key chain if response is empty.
         
         Args:
             session: Chat session with conversation history.
@@ -705,27 +879,59 @@ class ChatService:
             llm = self._create_llm_with_key(provider, model, api_key)
             return await llm.chat_async(session)
         
-        # Try all keys with fallback
-        errors: dict[int, str] = {}
-        for key_index, api_key in enumerate(api_keys):
-            try:
-                llm = self._create_llm_with_key(provider, model, api_key)
-                response = await llm.chat_async(session)
+        # Try all keys with full retry on empty responses
+        for retry_attempt in range(self._max_retries_on_empty + 1):
+            errors: dict[int, str] = {}
+            
+            if retry_attempt > 0:
                 logger.info(
-                    f"Successfully served async request using {provider.value} "
-                    f"with model {model} (key index {key_index})"
+                    f"Retrying all async keys for {provider.value} with model {model} "
+                    f"(attempt {retry_attempt + 1}/{self._max_retries_on_empty + 1})..."
                 )
-                return response
-            except Exception as e:
-                error_msg = str(e)
-                errors[key_index] = error_msg
+            
+            for key_index, api_key in enumerate(api_keys):
+                try:
+                    llm = self._create_llm_with_key(provider, model, api_key)
+                    response = await llm.chat_async(session)
+                    
+                    # Validate response is not empty
+                    if self._is_response_empty(response):
+                        logger.warning(
+                            f"Key {key_index} for {provider.value} returned empty response (attempt {retry_attempt + 1}). "
+                            f"Trying next key..."
+                        )
+                        error_msg = "Empty response from provider"
+                        errors[key_index] = error_msg
+                        continue
+                    
+                    # Success - return response
+                    logger.info(
+                        f"Successfully served async request using {provider.value} "
+                        f"with model {model} (key index {key_index}, attempt {retry_attempt + 1})"
+                    )
+                    return response
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    errors[key_index] = error_msg
+                    logger.warning(
+                        f"Key {key_index} for {provider.value} failed: {error_msg}. "
+                        f"Trying next key..."
+                    )
+            
+            # If this is not the last retry, try again with all keys
+            if retry_attempt < self._max_retries_on_empty:
                 logger.warning(
-                    f"Key {key_index} for {provider.value} failed: {error_msg}. "
-                    f"Trying next key..."
+                    f"All async keys for {provider.value} returned empty responses. "
+                    f"Retrying entire key chain..."
                 )
+                continue
         
-        # All keys failed
-        logger.error(f"All {len(api_keys)} keys failed for async {provider.value} with model {model}")
+        # All retries exhausted
+        logger.error(
+            f"All {len(api_keys)} async keys failed for {provider.value} with model {model} "
+            f"after {self._max_retries_on_empty + 1} retry attempts"
+        )
         raise AllKeysFailedError(provider.value, model, errors)
     
     async def chat_stream_async(
@@ -794,14 +1000,16 @@ class ChatService:
         """
         Try async streaming chat with automatic fallback on failure.
         
+        For each provider, tries ALL API keys before moving to next provider.
+        
         Args:
             session: Chat session with conversation history.
             
         Yields:
-            Response chunks from the first successful provider.
+            Response chunks from the first successful provider/key.
             
         Raises:
-            AllProvidersFailedError: If all providers fail.
+            AllProvidersFailedError: If all providers and all keys fail.
         """
         errors: dict[str, str] = {}
         tried_providers: set[LLMProvider] = set()
@@ -814,23 +1022,48 @@ class ChatService:
             
             tried_providers.add(config.provider)
             
-            try:
-                llm = self._get_or_create_llm(config)
-                stream = llm.chat_stream_async(session)
-                # Try to get first chunk to verify connection works
-                first_chunk = await stream.__anext__()
-                logger.info(f"Successfully streaming async using {config.provider.value}")
-                yield first_chunk
-                async for chunk in stream:
-                    yield chunk
-                return
-            except Exception as e:
-                error_msg = str(e)
-                errors[config.provider.value] = error_msg
-                logger.warning(
-                    f"Provider {config.provider.value} failed: {error_msg}. "
-                    f"Trying next provider..."
-                )
+            # Try ALL keys for this provider before moving to next
+            api_keys = config.get_api_keys()
+            if not api_keys:
+                errors[config.provider.value] = "No API keys configured"
+                logger.warning(f"No API keys configured for {config.provider.value}. Trying next provider...")
+                continue
+            
+            key_errors: list[str] = []
+            
+            for key_index, api_key in enumerate(api_keys):
+                try:
+                    llm = self._create_llm_with_key(
+                        config.provider, 
+                        config.default_model, 
+                        api_key
+                    )
+                    stream = llm.chat_stream_async(session)
+                    # Try to get first chunk to verify connection works
+                    first_chunk = await stream.__anext__()
+                    
+                    logger.info(
+                        f"Successfully streaming async using {config.provider.value} key {key_index}"
+                    )
+                    yield first_chunk
+                    async for chunk in stream:
+                        yield chunk
+                    return
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    key_errors.append(f"key_{key_index}: {error_msg}")
+                    logger.warning(
+                        f"Provider {config.provider.value} key {key_index} failed: {error_msg}. "
+                        f"Trying next key..."
+                    )
+            
+            # All keys for this provider failed
+            errors[config.provider.value] = "; ".join(key_errors)
+            logger.warning(
+                f"All {len(api_keys)} async keys for {config.provider.value} failed for streaming. "
+                f"Trying next provider..."
+            )
         
         logger.error(f"All {len(self._providers)} providers failed for async streaming")
         raise AllProvidersFailedError(errors)
