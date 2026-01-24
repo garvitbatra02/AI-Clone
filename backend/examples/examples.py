@@ -7,7 +7,7 @@ with different providers.
 
 import os
 from dotenv import load_dotenv
-from ChatServer import (
+from ChatService.Chat import (
     ChatSession,
     LLMConfig,
     LLMFactory,

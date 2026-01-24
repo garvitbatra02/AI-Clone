@@ -41,7 +41,7 @@ Expected output:
 ## Step 4: Start the Server
 
 ```bash
-uvicorn Server.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn ChatService.Server.main:app --host 0.0.0.0 --port 8000
 ```
 
 ## Step 5: Make Your First Request
@@ -77,7 +77,7 @@ curl -X POST http://localhost:8000/api/chat \
 ## Using Python SDK
 
 ```python
-from ChatServer import ChatSession, LLMProvider, chat_inference
+from ChatService.Chat import ChatSession, LLMProvider, chat_inference
 
 # Create a session
 session = ChatSession()
@@ -100,7 +100,7 @@ print(response.content)
 ## Streaming Example
 
 ```python
-from ChatServer import ChatSession, chat_inference_stream
+from ChatService.Chat import ChatSession, chat_inference_stream
 
 session = ChatSession()
 session.add_user_message("Write a short poem")

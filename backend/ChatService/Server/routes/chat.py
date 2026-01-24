@@ -10,7 +10,7 @@ from typing import AsyncGenerator
 import json
 import logging
 
-from ChatServer import (
+from ...Chat import (
     ChatSession,
     LLMProvider,
     chat_inference,

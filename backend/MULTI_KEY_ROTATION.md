@@ -109,7 +109,7 @@ curl -X POST http://localhost:8000/api/chat/stream \
 
 #### Default Model Chat
 ```python
-from ChatServer import ChatSession, chat_inference
+from ChatService.Chat import ChatSession, chat_inference
 
 session = ChatSession()
 session.add_user_message("Hello!")
@@ -121,7 +121,7 @@ print(response.content)
 
 #### Specific Model Chat
 ```python
-from ChatServer import ChatSession, LLMProvider, chat_inference
+from ChatService.Chat import ChatSession, LLMProvider, chat_inference
 
 session = ChatSession()
 session.add_user_message("Explain quantum computing")
@@ -138,7 +138,7 @@ print(response.content)
 
 #### Streaming with Default Model
 ```python
-from ChatServer import ChatSession, chat_inference_stream
+from ChatService.Chat import ChatSession, chat_inference_stream
 
 session = ChatSession()
 session.add_user_message("Write a poem")
@@ -149,7 +149,7 @@ for chunk in chat_inference_stream(session, fallback=True):
 
 #### Streaming with Specific Model
 ```python
-from ChatServer import ChatSession, LLMProvider, chat_inference_stream
+from ChatService.Chat import ChatSession, LLMProvider, chat_inference_stream
 
 session = ChatSession()
 session.add_user_message("Tell me a story")
@@ -166,7 +166,7 @@ for chunk in chat_inference_stream(
 #### Async Operations
 ```python
 import asyncio
-from ChatServer import ChatSession, chat_inference_async
+from ChatService.Chat import ChatSession, chat_inference_async
 
 async def chat():
     session = ChatSession()
@@ -182,7 +182,7 @@ asyncio.run(chat())
 
 ### AllProvidersFailedError (Path A)
 ```python
-from ChatServer import chat_inference, AllProvidersFailedError
+from ChatService.Chat import chat_inference, AllProvidersFailedError
 
 try:
     response = chat_inference(session, fallback=True)
@@ -193,8 +193,8 @@ except AllProvidersFailedError as e:
 
 ### AllKeysFailedError (Path B)
 ```python
-from ChatServer import chat_inference
-from ChatServer.services.chat_service import AllKeysFailedError
+from ChatService.Chat import chat_inference
+from ChatService.Chat.services.chat_service import AllKeysFailedError
 
 try:
     response = chat_inference(

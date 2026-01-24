@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
-from ChatServer import get_chat_service
+from ..Chat import get_chat_service
 from .routes.chat import router as chat_router
 from .models.schemas import HealthResponse, ServiceInfoResponse
 

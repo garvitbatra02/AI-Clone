@@ -24,18 +24,18 @@ import sys
 import asyncio
 from pathlib import Path
 
-# Add parent directory to path to import ChatServer
+# Add parent directory to path to import ChatService
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from ChatServer import ChatSession, LLMProvider
-from ChatServer.services import (
+from ChatService.Chat import ChatSession, LLMProvider
+from ChatService.Chat.services import (
     get_chat_service,
     chat_inference,
     chat_inference_stream,
     chat_inference_async,
     chat_inference_stream_async,
 )
-from ChatServer.services.chat_service import AllProvidersFailedError, AllKeysFailedError
+from ChatService.Chat.services.chat_service import AllProvidersFailedError, AllKeysFailedError
 from dotenv import load_dotenv
 
 # Load environment variables

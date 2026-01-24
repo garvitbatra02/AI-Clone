@@ -12,7 +12,7 @@ This demonstrates:
 import os
 import asyncio
 from dotenv import load_dotenv
-from ChatServer import (
+from ChatService.Chat import (
     ChatSession,
     ChatService,
     ProviderConfig,

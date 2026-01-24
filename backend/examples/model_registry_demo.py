@@ -10,7 +10,7 @@ This script shows how to:
 Run this script to see the model registry in action.
 """
 
-from ChatServer import (
+from ChatService.Chat import (
     LLMFactory,
     LLMProvider,
     get_provider_for_model,
