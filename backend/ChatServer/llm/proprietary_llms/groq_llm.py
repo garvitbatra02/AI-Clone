@@ -2,9 +2,10 @@
 Groq LLM implementation using LangChain.
 
 Provides integration with Groq's fast inference API via LangChain.
+Inherits resilience features (key rotation, retry) from BaseLLM.
 """
 
-from typing import AsyncIterator
+from typing import AsyncIterator, Iterator
 from ..base import BaseLLM, LLMConfig, LLMResponse, LLMProvider
 from ...session.chat_session import ChatSession, MessageRole
 
@@ -12,6 +13,9 @@ from ...session.chat_session import ChatSession, MessageRole
 class GroqLLM(BaseLLM):
     """
     Groq LLM implementation using LangChain for fast inference.
+    
+    Resilience features (key rotation, retry on empty) are inherited from BaseLLM.
+    This class only implements the raw API calls.
     
     Supports models like:
     - llama-3.3-70b-versatile
@@ -23,21 +27,21 @@ class GroqLLM(BaseLLM):
     Example:
         config = LLMConfig(
             model="llama-3.1-70b-versatile",
-            api_key="your-api-key",
+            api_keys=["key1", "key2", "key3"],  # Multiple keys for resilience
             temperature=0.7
         )
         llm = GroqLLM(config)
-        response = llm.chat(session)
+        response = llm.chat(session)  # Automatic key rotation on failure
     """
     
-    def _initialize_client(self) -> None:
-        """Initialize the LangChain ChatGroq client."""
+    def _initialize_client(self, api_key: str) -> None:
+        """Initialize the LangChain ChatGroq client with given API key."""
         try:
             from langchain_groq import ChatGroq
             
             self._client = ChatGroq(
                 model=self.config.model,
-                api_key=self.config.api_key,
+                api_key=api_key,
                 temperature=self.config.temperature,
                 max_tokens=self.config.max_tokens,
                 **self.config.extra_params,
@@ -103,9 +107,10 @@ class GroqLLM(BaseLLM):
                 }
         return usage
     
-    def chat(self, session: ChatSession) -> LLMResponse:
+    def _do_chat(self, session: ChatSession) -> LLMResponse:
         """
-        Send a chat request to Groq via LangChain.
+        Raw chat call to Groq via LangChain.
+        Resilience logic is handled by BaseLLM.chat()
         
         Args:
             session: ChatSession with conversation history
@@ -129,9 +134,10 @@ class GroqLLM(BaseLLM):
             raw_response=response,
         )
     
-    async def chat_async(self, session: ChatSession) -> LLMResponse:
+    async def _do_chat_async(self, session: ChatSession) -> LLMResponse:
         """
-        Asynchronously send a chat request to Groq via LangChain.
+        Raw async chat call to Groq via LangChain.
+        Resilience logic is handled by BaseLLM.chat_async()
         
         Args:
             session: ChatSession with conversation history
@@ -155,9 +161,10 @@ class GroqLLM(BaseLLM):
             raw_response=response,
         )
     
-    def chat_stream(self, session: ChatSession):
+    def _do_chat_stream(self, session: ChatSession) -> Iterator[str]:
         """
-        Stream chat responses from Groq via LangChain.
+        Raw streaming call to Groq via LangChain.
+        Resilience logic is handled by BaseLLM.chat_stream()
         
         Args:
             session: ChatSession with conversation history
@@ -171,9 +178,10 @@ class GroqLLM(BaseLLM):
             if chunk.content:
                 yield chunk.content
     
-    async def chat_stream_async(self, session: ChatSession) -> AsyncIterator[str]:
+    async def _do_chat_stream_async(self, session: ChatSession) -> AsyncIterator[str]:
         """
-        Asynchronously stream chat responses from Groq via LangChain.
+        Raw async streaming call to Groq via LangChain.
+        Resilience logic is handled by BaseLLM.chat_stream_async()
         
         Args:
             session: ChatSession with conversation history

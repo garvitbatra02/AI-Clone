@@ -5,7 +5,7 @@ This package provides a generic interface for interacting with various LLM provi
 (Groq, Cerebras) through a unified API.
 """
 
-from .llm.base import BaseLLM, LLMConfig, LLMResponse, LLMProvider
+from .llm.base import BaseLLM, LLMConfig, LLMResponse, LLMProvider, AllKeysFailedError
 from .llm.proprietary_llms.groq_llm import GroqLLM
 from .llm.proprietary_llms.cerebras_llm import CerebrasLLM
 from .llm.factory import LLMFactory
@@ -22,7 +22,6 @@ from .services.chat_service import (
     ChatService,
     ProviderConfig,
     AllProvidersFailedError,
-    AllKeysFailedError,
     get_chat_service,
     chat_inference,
     chat_inference_stream,

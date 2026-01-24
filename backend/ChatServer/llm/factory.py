@@ -2,9 +2,10 @@
 LLM Factory for creating LLM instances.
 
 Provides a unified interface for creating LLM instances based on provider type.
+Supports both single API key and multiple API keys for resilience.
 """
 
-from typing import Optional, Type
+from typing import Optional, Type, Union
 from .base import BaseLLM, LLMConfig, LLMProvider
 from .proprietary_llms.gemini_llm import GeminiLLM
 from .proprietary_llms.groq_llm import GroqLLM
@@ -14,23 +15,25 @@ from .model_registry import get_provider_for_model
 
 class LLMFactory:
     """
-    Factory class for creating LLM instances.
+    Factory class for creating LLM instances with built-in resilience.
     
     This class provides a centralized way to create LLM instances
-    based on the provider type or model name.
+    based on the provider type or model name. Supports multiple API keys
+    for automatic key rotation and retry on failure.
     
     Example:
-        # Create by provider
+        # Create with single API key
         llm = LLMFactory.create(
             provider=LLMProvider.GEMINI,
             model="gemini-2.5-flash",
             api_key="your-api-key"
         )
         
-        # Create by model name (auto-detects provider)
-        llm = LLMFactory.from_model(
-            model="llama-3.3-70b",
-            api_key="your-api-key"
+        # Create with multiple API keys (resilient)
+        llm = LLMFactory.create(
+            provider=LLMProvider.GROQ,
+            model="llama-3.3-70b-versatile",
+            api_keys=["key1", "key2", "key3"]  # Auto-rotation on failure
         )
     """
     
@@ -46,9 +49,11 @@ class LLMFactory:
         cls,
         provider: LLMProvider,
         model: str,
-        api_key: str,
+        api_key: Optional[str] = None,
+        api_keys: Optional[list[str]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        max_retries: int = 2,
         **kwargs,
     ) -> BaseLLM:
         """
@@ -57,23 +62,33 @@ class LLMFactory:
         Args:
             provider: The LLM provider
             model: The model identifier
-            api_key: API key for the provider
+            api_key: Single API key (for backward compatibility)
+            api_keys: List of API keys for resilience (preferred)
             temperature: Sampling temperature
             max_tokens: Maximum tokens in response
+            max_retries: Max retry attempts on empty response
             **kwargs: Additional configuration parameters
             
         Returns:
-            An initialized LLM instance
+            An initialized LLM instance with built-in resilience
             
         Raises:
-            ValueError: If the provider is not supported
+            ValueError: If the provider is not supported or no API keys provided
         """
         if provider not in cls._provider_map:
             raise ValueError(f"Unsupported provider: {provider}")
         
+        # Handle API keys - support both single key and list
+        if api_keys is None and api_key is None:
+            raise ValueError("Either api_key or api_keys must be provided")
+        
+        if api_keys is None:
+            api_keys = [api_key]
+        
         config = LLMConfig(
             model=model,
-            api_key=api_key,
+            api_keys=api_keys,
+            max_retries=max_retries,
             temperature=temperature,
             max_tokens=max_tokens,
             **kwargs,
@@ -86,9 +101,11 @@ class LLMFactory:
     def from_model(
         cls,
         model: str,
-        api_key: str,
+        api_key: Optional[str] = None,
+        api_keys: Optional[list[str]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        max_retries: int = 2,
         provider: Optional[LLMProvider] = None,
         **kwargs,
     ) -> BaseLLM:
@@ -97,14 +114,16 @@ class LLMFactory:
         
         Args:
             model: The model identifier
-            api_key: API key for the provider
+            api_key: Single API key (for backward compatibility)
+            api_keys: List of API keys for resilience (preferred)
             temperature: Sampling temperature
             max_tokens: Maximum tokens in response
+            max_retries: Max retry attempts on empty response
             provider: Optional provider override (auto-detected if not provided)
             **kwargs: Additional configuration parameters
             
         Returns:
-            An initialized LLM instance
+            An initialized LLM instance with built-in resilience
             
         Raises:
             ValueError: If the provider cannot be determined
@@ -122,8 +141,10 @@ class LLMFactory:
             provider=provider,
             model=model,
             api_key=api_key,
+            api_keys=api_keys,
             temperature=temperature,
             max_tokens=max_tokens,
+            max_retries=max_retries,
             **kwargs,
         )
     

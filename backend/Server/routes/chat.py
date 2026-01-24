@@ -19,8 +19,8 @@ from ChatServer import (
     chat_inference_stream_async,
     get_chat_service,
     AllProvidersFailedError,
+    AllKeysFailedError,
 )
-from ChatServer.services.chat_service import AllKeysFailedError
 from ..models.schemas import (
     ChatRequest,
     ChatResponse,
