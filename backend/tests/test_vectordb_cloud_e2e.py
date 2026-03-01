@@ -57,7 +57,6 @@ from RAGService.Data.VectorDB import (
 # ── Configuration ────────────────────────────────────────────────
 
 QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 DIM = 128  # small dimension for fast tests
 
@@ -81,7 +80,6 @@ def _make_db(collection: str = COLLECTION):
         collection_name=collection,
         embedding_dimension=DIM,
         url=QDRANT_URL,
-        api_key=QDRANT_API_KEY,
         distance_metric=DistanceMetric.COSINE,
         prefer_grpc=False,           # REST is more reliable for cloud
         extra_config={},
@@ -639,7 +637,7 @@ def test_rich_metadata_roundtrip():
 
 def main():
     # ── Pre-flight checks ────────────────────────────────────────
-    if not QDRANT_URL or not QDRANT_API_KEY:
+    if not QDRANT_URL or not os.getenv("QDRANT_API_KEY"):
         print("❌  QDRANT_URL and QDRANT_API_KEY must be set in .env")
         sys.exit(1)
 

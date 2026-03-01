@@ -63,9 +63,7 @@ from RAGService.Data.services.asset_upload_service import (
 
 # ── Configuration ────────────────────────────────────────────────
 
-COHERE_API_KEY = os.getenv("COHERE_API_KEY")
 QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 EMBEDDING_DIM = 1024  # embed-english-v3.0
 
@@ -140,7 +138,6 @@ def _print_result(result: UploadResult, label: str) -> None:
 def _build_embeddings():
     """Build a real Cohere embeddings instance."""
     return EmbeddingsFactory.create_cohere(
-        api_key=COHERE_API_KEY,
         model_name="embed-english-v3.0",
     )
 
@@ -198,7 +195,6 @@ def _build_cloud_service(
         collection_name=collection,
         embedding_dimension=EMBEDDING_DIM,
         url=QDRANT_URL,
-        api_key=QDRANT_API_KEY,
         distance_metric=DistanceMetric.COSINE,
         prefer_grpc=False,  # REST — gRPC hangs on cloud
     )
@@ -749,13 +745,13 @@ def test_14_llm_plus_cloud():
 
 def main():
     # ── Pre-flight checks ──────────────────────────────────────
-    if not COHERE_API_KEY:
+    if not os.getenv("COHERE_API_KEY"):
         print("❌  COHERE_API_KEY not set. Cannot run any tests.")
         sys.exit(1)
 
     groq_keys = _get_groq_keys()
     has_llm = len(groq_keys) > 0
-    has_cloud = bool(QDRANT_URL and QDRANT_API_KEY)
+    has_cloud = bool(QDRANT_URL and os.getenv("QDRANT_API_KEY"))
 
     print(f"\n{'=' * 70}")
     print("  Asset Upload Service — E2E Test Suite")
@@ -857,10 +853,10 @@ def test_persist_all_formats_cloud():
     Upload TXT, CSV, JSON, and PDF to a SINGLE Qdrant Cloud collection.
     Collections are NOT deleted — inspect them on the Qdrant dashboard.
     """
-    if not COHERE_API_KEY:
+    if not os.getenv("COHERE_API_KEY"):
         print("❌  COHERE_API_KEY not set.")
         sys.exit(1)
-    if not QDRANT_URL or not QDRANT_API_KEY:
+    if not QDRANT_URL or not os.getenv("QDRANT_API_KEY"):
         print("❌  QDRANT_URL / QDRANT_API_KEY not set.")
         sys.exit(1)
 

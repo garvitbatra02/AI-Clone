@@ -5,7 +5,6 @@ Factory class for creating vector database instances.
 Follows the same pattern as the LLM factory in ChatService.
 """
 
-import os
 from typing import Any, Dict, Optional, Type
 
 from RAGService.Data.VectorDB.base import (
@@ -34,7 +33,6 @@ class VectorDBFactory:
         config = VectorDBConfig.for_qdrant(
             collection_name="my_collection",
             embedding_dimension=768,
-            url="http://localhost:6333"
         )
         db = VectorDBFactory.create(config)
         
@@ -68,43 +66,29 @@ class VectorDBFactory:
         provider: VectorDBProvider,
         collection_name: str,
         embedding_dimension: int,
-        url_env_var: Optional[str] = None,
-        api_key_env_var: Optional[str] = None,
         distance_metric: DistanceMetric = DistanceMetric.COSINE,
         **extra_config
     ) -> BaseVectorDB:
         """
         Create a vector database instance from environment variables.
         
-        Uses sensible defaults for environment variable names based on provider.
+        The provider implementation resolves its own API key and URL
+        from environment variables when not explicitly provided in config.
         
         Args:
             provider: The vector database provider
             collection_name: Name of the collection
             embedding_dimension: Dimension of embedding vectors
-            url_env_var: Environment variable for URL (default: {PROVIDER}_URL)
-            api_key_env_var: Environment variable for API key (default: {PROVIDER}_API_KEY)
             distance_metric: Distance metric for similarity
             **extra_config: Additional provider-specific configuration
             
         Returns:
             Configured BaseVectorDB instance
         """
-        provider_name = provider.value.upper()
-        
-        # Default environment variable names
-        url_var = url_env_var or f"{provider_name}_URL"
-        api_key_var = api_key_env_var or f"{provider_name}_API_KEY"
-        
-        url = os.environ.get(url_var)
-        api_key = os.environ.get(api_key_var)
-        
         config = VectorDBConfig(
             provider=provider,
             collection_name=collection_name,
             embedding_dimension=embedding_dimension,
-            url=url,
-            api_key=api_key,
             distance_metric=distance_metric,
             extra_config=extra_config
         )
@@ -115,8 +99,6 @@ class VectorDBFactory:
     def create_qdrant(
         collection_name: str,
         embedding_dimension: int,
-        url: Optional[str] = None,
-        api_key: Optional[str] = None,
         distance_metric: DistanceMetric = DistanceMetric.COSINE,
         in_memory: bool = False,
         path: Optional[str] = None,
@@ -125,11 +107,13 @@ class VectorDBFactory:
         """
         Convenience method to create a Qdrant instance.
         
+        The Qdrant provider resolves its own URL and API key from
+        environment variables (QDRANT_URL, QDRANT_API_KEY) when not
+        explicitly provided in config.
+        
         Args:
             collection_name: Name of the collection
             embedding_dimension: Dimension of embedding vectors
-            url: Qdrant server URL (e.g., "http://localhost:6333")
-            api_key: API key for Qdrant Cloud
             distance_metric: Distance metric for similarity
             in_memory: Use in-memory storage (for testing)
             path: Local file path for persistent storage
@@ -148,8 +132,6 @@ class VectorDBFactory:
             provider=VectorDBProvider.QDRANT,
             collection_name=collection_name,
             embedding_dimension=embedding_dimension,
-            url=url,
-            api_key=api_key,
             distance_metric=distance_metric,
             extra_config=extra
         )

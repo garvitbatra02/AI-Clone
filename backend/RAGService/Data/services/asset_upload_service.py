@@ -68,9 +68,7 @@ class AssetUploadConfig:
     Attributes:
         vectordb_provider: Vector database provider
         embedding_provider: Embedding model provider
-        vectordb_url: URL for vector database
-        vectordb_api_key: API key for vector database
-        embedding_api_key: API key for embedding model
+        vectordb_url: URL for vector database (None = in-memory mode)
         embedding_model: Embedding model name
         chunk_size: Size of text chunks
         chunk_overlap: Overlap between chunks
@@ -80,8 +78,6 @@ class AssetUploadConfig:
     vectordb_provider: VectorDBProvider = VectorDBProvider.QDRANT
     embedding_provider: EmbeddingProvider = EmbeddingProvider.COHERE
     vectordb_url: Optional[str] = None
-    vectordb_api_key: Optional[str] = None
-    embedding_api_key: Optional[str] = None
     embedding_model: Optional[str] = None
     chunk_size: int = 1000
     chunk_overlap: int = 200
@@ -106,8 +102,6 @@ class AssetUploadConfig:
                 os.environ.get("EMBEDDING_PROVIDER", "cohere")
             ),
             vectordb_url=os.environ.get("QDRANT_URL"),
-            vectordb_api_key=os.environ.get("QDRANT_API_KEY"),
-            embedding_api_key=os.environ.get("COHERE_API_KEY"),
             embedding_model=os.environ.get("EMBEDDING_MODEL"),
             chunk_size=int(os.environ.get("CHUNK_SIZE", "1000")),
             chunk_overlap=int(os.environ.get("CHUNK_OVERLAP", "200")),
@@ -200,12 +194,10 @@ class AssetUploadService:
         """Create embeddings instance from config."""
         if self.config.embedding_provider == EmbeddingProvider.COHERE:
             return EmbeddingsFactory.create_cohere(
-                api_key=self.config.embedding_api_key,
                 model_name=self.config.embedding_model or "embed-english-v3.0"
             )
         elif self.config.embedding_provider == EmbeddingProvider.OPENAI:
             return EmbeddingsFactory.create_openai(
-                api_key=self.config.embedding_api_key,
                 model_name=self.config.embedding_model or "text-embedding-3-small"
             )
         else:
@@ -217,8 +209,6 @@ class AssetUploadService:
             return VectorDBFactory.create_qdrant(
                 collection_name=self.config.default_collection,
                 embedding_dimension=self._embeddings.dimension,
-                url=self.config.vectordb_url,
-                api_key=self.config.vectordb_api_key,
                 distance_metric=self.config.distance_metric,
                 in_memory=(self.config.vectordb_url is None)
             )
@@ -228,7 +218,6 @@ class AssetUploadService:
                 collection_name=self.config.default_collection,
                 embedding_dimension=self._embeddings.dimension,
                 url=self.config.vectordb_url,
-                api_key=self.config.vectordb_api_key,
                 distance_metric=self.config.distance_metric,
             )
             return VectorDBFactory.create(vectordb_config)

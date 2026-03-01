@@ -8,6 +8,7 @@ supporting both synchronous and asynchronous operations.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from qdrant_client import AsyncQdrantClient, QdrantClient
@@ -63,14 +64,15 @@ class QdrantVectorDB(BaseVectorDB):
             extra_config={"path": "./qdrant_data"}
         )
         
-        # Remote server
+        # Remote server (URL and API key loaded from QDRANT_URL / QDRANT_API_KEY env vars)
         config = VectorDBConfig.for_qdrant(
             collection_name="test",
             embedding_dimension=768,
-            url="http://localhost:6333",
-            api_key="your-api-key"  # Optional for Qdrant Cloud
         )
     """
+    
+    ENV_API_KEY_VAR: str = "QDRANT_API_KEY"
+    ENV_URL_VAR: str = "QDRANT_URL"
     
     _client: QdrantClient
     _async_client: AsyncQdrantClient
@@ -83,6 +85,10 @@ class QdrantVectorDB(BaseVectorDB):
         in_memory = extra.get("in_memory", False)
         path = extra.get("path")
         
+        # Resolve url and api_key: explicit config takes priority, then env vars
+        url = self.config.url or os.environ.get(self.ENV_URL_VAR)
+        api_key = self.config.api_key or os.environ.get(self.ENV_API_KEY_VAR)
+        
         if in_memory:
             # In-memory mode for testing
             self._client = QdrantClient(location=":memory:")
@@ -91,17 +97,17 @@ class QdrantVectorDB(BaseVectorDB):
             # Local file storage
             self._client = QdrantClient(path=path)
             self._async_client = AsyncQdrantClient(path=path)
-        elif self.config.url:
+        elif url:
             # Remote server
             self._client = QdrantClient(
-                url=self.config.url,
-                api_key=self.config.api_key,
+                url=url,
+                api_key=api_key,
                 timeout=self.config.timeout,
                 prefer_grpc=self.config.prefer_grpc,
             )
             self._async_client = AsyncQdrantClient(
-                url=self.config.url,
-                api_key=self.config.api_key,
+                url=url,
+                api_key=api_key,
                 timeout=self.config.timeout,
                 prefer_grpc=self.config.prefer_grpc,
             )

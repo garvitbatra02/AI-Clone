@@ -41,9 +41,7 @@ class VectorDBServiceConfig:
         vectordb_provider: Vector database provider to use
         embedding_provider: Embedding model provider to use
         collection_name: Default collection name
-        vectordb_url: URL for vector database
-        vectordb_api_key: API key for vector database
-        embedding_api_key: API key for embedding model
+        vectordb_url: URL for vector database (None = in-memory mode)
         embedding_model: Embedding model name
         distance_metric: Distance metric for similarity
         auto_create_collection: Whether to auto-create collection if not exists
@@ -52,8 +50,6 @@ class VectorDBServiceConfig:
     embedding_provider: EmbeddingProvider = EmbeddingProvider.COHERE
     collection_name: str = "default"
     vectordb_url: Optional[str] = None
-    vectordb_api_key: Optional[str] = None
-    embedding_api_key: Optional[str] = None
     embedding_model: Optional[str] = None
     distance_metric: DistanceMetric = DistanceMetric.COSINE
     auto_create_collection: bool = True
@@ -70,8 +66,6 @@ class VectorDBServiceConfig:
             ),
             collection_name=collection_name,
             vectordb_url=os.environ.get("QDRANT_URL"),
-            vectordb_api_key=os.environ.get("QDRANT_API_KEY"),
-            embedding_api_key=os.environ.get("COHERE_API_KEY"),
             embedding_model=os.environ.get("EMBEDDING_MODEL"),
         )
 
@@ -141,12 +135,10 @@ class VectorDBService:
         """Create embeddings instance from config."""
         if self.config.embedding_provider == EmbeddingProvider.COHERE:
             return EmbeddingsFactory.create_cohere(
-                api_key=self.config.embedding_api_key,
                 model_name=self.config.embedding_model or "embed-english-v3.0"
             )
         elif self.config.embedding_provider == EmbeddingProvider.OPENAI:
             return EmbeddingsFactory.create_openai(
-                api_key=self.config.embedding_api_key,
                 model_name=self.config.embedding_model or "text-embedding-3-small"
             )
         elif self.config.embedding_provider == EmbeddingProvider.HUGGINGFACE:
@@ -162,8 +154,6 @@ class VectorDBService:
             return VectorDBFactory.create_qdrant(
                 collection_name=self.config.collection_name,
                 embedding_dimension=self._embeddings.dimension,
-                url=self.config.vectordb_url,
-                api_key=self.config.vectordb_api_key,
                 distance_metric=self.config.distance_metric,
                 in_memory=(self.config.vectordb_url is None)
             )
@@ -173,7 +163,6 @@ class VectorDBService:
                 collection_name=self.config.collection_name,
                 embedding_dimension=self._embeddings.dimension,
                 url=self.config.vectordb_url,
-                api_key=self.config.vectordb_api_key,
                 distance_metric=self.config.distance_metric,
             )
             return VectorDBFactory.create(vectordb_config)

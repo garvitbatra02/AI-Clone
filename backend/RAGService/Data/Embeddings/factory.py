@@ -4,7 +4,6 @@ Embeddings Factory
 Factory class for creating embedding model instances.
 """
 
-import os
 from typing import Optional, Type
 
 from RAGService.Data.Embeddings.base import (
@@ -29,7 +28,7 @@ class EmbeddingsFactory:
     
     Example:
         # Create from config
-        config = EmbeddingConfig.for_cohere(api_key="your-api-key")
+        config = EmbeddingConfig.for_cohere()
         embeddings = EmbeddingsFactory.create(config)
         
         # Create from environment
@@ -62,27 +61,22 @@ class EmbeddingsFactory:
     def create_from_env(
         provider: EmbeddingProvider,
         model_name: Optional[str] = None,
-        api_key_env_var: Optional[str] = None,
         **extra_config
     ) -> BaseEmbeddings:
         """
         Create an embedding model instance from environment variables.
         
+        The provider implementation resolves its own API key from
+        environment variables when not explicitly provided in config.
+        
         Args:
             provider: The embedding provider
             model_name: Model name (uses provider default if not provided)
-            api_key_env_var: Environment variable for API key
             **extra_config: Additional configuration
             
         Returns:
             Configured BaseEmbeddings instance
         """
-        provider_name = provider.value.upper()
-        
-        # Default environment variable names
-        api_key_var = api_key_env_var or f"{provider_name}_API_KEY"
-        api_key = os.environ.get(api_key_var)
-        
         # Default model names per provider
         default_models = {
             EmbeddingProvider.COHERE: "embed-english-v3.0",
@@ -95,7 +89,6 @@ class EmbeddingsFactory:
         config = EmbeddingConfig(
             provider=provider,
             model_name=model,
-            api_key=api_key,
             extra_config=extra_config
         )
         
@@ -103,24 +96,23 @@ class EmbeddingsFactory:
     
     @staticmethod
     def create_cohere(
-        api_key: Optional[str] = None,
         model_name: str = "embed-english-v3.0",
         **extra_config
     ) -> BaseEmbeddings:
         """
         Convenience method to create Cohere embeddings.
         
+        The Cohere provider resolves its own API key from the
+        COHERE_API_KEY environment variable when not provided in config.
+        
         Args:
-            api_key: Cohere API key (reads from COHERE_API_KEY if not provided)
             model_name: Model name (default: embed-english-v3.0)
             **extra_config: Additional configuration
             
         Returns:
             Configured CohereEmbeddings instance
         """
-        key = api_key or os.environ.get("COHERE_API_KEY")
         config = EmbeddingConfig.for_cohere(
-            api_key=key,
             model_name=model_name,
             **extra_config
         )
@@ -128,24 +120,23 @@ class EmbeddingsFactory:
     
     @staticmethod
     def create_openai(
-        api_key: Optional[str] = None,
         model_name: str = "text-embedding-3-small",
         **extra_config
     ) -> BaseEmbeddings:
         """
         Convenience method to create OpenAI embeddings.
         
+        The OpenAI provider resolves its own API key from the
+        OPENAI_API_KEY environment variable when not provided in config.
+        
         Args:
-            api_key: OpenAI API key (reads from OPENAI_API_KEY if not provided)
             model_name: Model name (default: text-embedding-3-small)
             **extra_config: Additional configuration
             
         Returns:
             Configured OpenAIEmbeddings instance
         """
-        key = api_key or os.environ.get("OPENAI_API_KEY")
         config = EmbeddingConfig.for_openai(
-            api_key=key,
             model_name=model_name,
             **extra_config
         )

@@ -39,7 +39,6 @@ class CohereEmbeddings(BaseEmbeddings):
     
     Example:
         config = EmbeddingConfig.for_cohere(
-            api_key="your-api-key",
             model_name="embed-english-v3.0"
         )
         embeddings = CohereEmbeddings(config)
@@ -53,6 +52,8 @@ class CohereEmbeddings(BaseEmbeddings):
             "Deep learning uses neural networks."
         ])
     """
+    
+    ENV_VAR_NAME: str = "COHERE_API_KEY"
     
     _client: ClientV2
     _async_client: AsyncClientV2
@@ -80,12 +81,12 @@ class CohereEmbeddings(BaseEmbeddings):
     
     def _initialize_client(self) -> None:
         """Initialize Cohere clients (sync and async)."""
-        api_key = self.config.api_key or os.environ.get("COHERE_API_KEY")
+        api_key = self.config.api_key or os.environ.get(self.ENV_VAR_NAME)
         
         if not api_key:
             raise ValueError(
-                "Cohere API key is required. Provide it via config or "
-                "set the COHERE_API_KEY environment variable."
+                f"Cohere API key is required. Provide it via config or "
+                f"set the {self.ENV_VAR_NAME} environment variable."
             )
         
         self._client = ClientV2(
