@@ -94,7 +94,6 @@ class AssetUploadConfig:
     use_llm_analysis: bool = False
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
-    llm_api_keys: Optional[List[str]] = None
     
     @classmethod
     def from_env(cls) -> "AssetUploadConfig":
@@ -181,7 +180,6 @@ class AssetUploadService:
                 use_llm_analysis=self.config.use_llm_analysis,
                 llm_provider=self.config.llm_provider,
                 llm_model=self.config.llm_model,
-                llm_api_keys=self.config.llm_api_keys,
             )
             self._smart_chunker = SmartChunker(smart_config)
         else:

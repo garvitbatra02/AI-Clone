@@ -14,23 +14,21 @@ class CerebrasLLM(BaseLLM):
     """
     Cerebras LLM implementation using LangChain.
     
-    Cerebras provides ultra-fast inference with specialized AI processors.
+    API keys are loaded automatically from the CEREBRAS_API_KEYS environment
+    variable. Cerebras provides ultra-fast inference with specialized AI processors.
     Resilience features (key rotation, retry on empty) are inherited from BaseLLM.
-    This class only implements the raw API calls.
     
     Supports models like:
     - llama3.1-8b
-    - llama3.1-70b
+    - gpt-oss-120b
     
     Example:
-        config = LLMConfig(
-            model="llama3.1-70b",
-            api_keys=["key1", "key2", "key3"],  # Multiple keys for resilience
-            temperature=0.7
-        )
-        llm = CerebrasLLM(config)
+        config = LLMConfig(model="llama3.1-8b")
+        llm = CerebrasLLM(config)  # Keys loaded from CEREBRAS_API_KEYS env var
         response = llm.chat(session)  # Automatic key rotation on failure
     """
+    
+    ENV_VAR_NAME = "CEREBRAS_API_KEYS"
     
     def _initialize_client(self, api_key: str) -> None:
         """Initialize the LangChain ChatCerebras client with given API key."""

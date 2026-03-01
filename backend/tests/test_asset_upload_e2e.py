@@ -163,8 +163,6 @@ def _build_inmemory_service(
         distance_metric=DistanceMetric.COSINE,
     )
 
-    groq_keys = _get_groq_keys() if use_llm else None
-
     config = AssetUploadConfig(
         default_collection=collection,
         chunk_size=1000,
@@ -173,7 +171,6 @@ def _build_inmemory_service(
         use_llm_analysis=use_llm,
         llm_provider="groq" if use_llm else None,
         llm_model="llama-3.1-8b-instant" if use_llm else None,
-        llm_api_keys=groq_keys,
     )
 
     return AssetUploadService(
@@ -207,8 +204,6 @@ def _build_cloud_service(
     )
     vectordb = VectorDBFactory.create(cloud_config)
 
-    groq_keys = _get_groq_keys() if use_llm else None
-
     config = AssetUploadConfig(
         default_collection=collection,
         chunk_size=1000,
@@ -217,7 +212,6 @@ def _build_cloud_service(
         use_llm_analysis=use_llm,
         llm_provider="groq" if use_llm else None,
         llm_model="llama-3.1-8b-instant" if use_llm else None,
-        llm_api_keys=groq_keys,
     )
 
     return AssetUploadService(

@@ -5,9 +5,13 @@ This module defines the contract that all LLM implementations must follow,
 ensuring a consistent API across different providers.
 
 Resilience features are built into BaseLLM:
+- Automatic API key loading from environment variables
 - Multiple API keys with automatic rotation
 - Retry on failure or empty response
 - All LLM implementations inherit these features automatically
+
+API keys are fully encapsulated inside the LLM layer. External callers
+never need to handle, pass, or even know about API keys.
 """
 
 from abc import ABC, abstractmethod
@@ -15,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import AsyncIterator, Iterator, Optional, Any, Union
 from enum import Enum
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +55,12 @@ class LLMConfig:
     """
     Configuration for LLM instances with built-in resilience.
     
+    API keys are optional here — when omitted, the LLM subclass will
+    automatically load them from its designated environment variable.
+    
     Attributes:
-        model: The model identifier (e.g., 'gemini-1.5-pro', 'llama-3.1-70b')
-        api_keys: List of API keys for rotation and fallback
+        model: The model identifier (e.g., 'llama-3.3-70b-versatile')
+        api_keys: Optional list of API keys (auto-loaded from env if omitted)
         max_retries: Maximum retry attempts on empty response (default: 2)
         temperature: Sampling temperature (0.0 to 2.0)
         max_tokens: Maximum tokens in the response
@@ -64,7 +72,7 @@ class LLMConfig:
         extra_params: Additional provider-specific parameters
     """
     model: str
-    api_keys: list[str]  # Multiple API keys for resilience
+    api_keys: Optional[list[str]] = None  # Auto-loaded from env if omitted
     max_retries: int = 2  # Retry attempts on empty response
     temperature: float = 0.7
     max_tokens: int = 4096
@@ -74,16 +82,6 @@ class LLMConfig:
     timeout: int = 60
     base_url: Optional[str] = None
     extra_params: dict[str, Any] = field(default_factory=dict)
-    
-    @property
-    def api_key(self) -> str:
-        """Return first API key for backward compatibility."""
-        return self.api_keys[0] if self.api_keys else ""
-    
-    @classmethod
-    def from_single_key(cls, model: str, api_key: str, **kwargs) -> "LLMConfig":
-        """Create config from a single API key (backward compatibility)."""
-        return cls(model=model, api_keys=[api_key], **kwargs)
 
 
 @dataclass
@@ -132,12 +130,17 @@ class BaseLLM(ABC):
     """
     Abstract base class for all LLM implementations with built-in resilience.
     
+    API keys are fully encapsulated — they are loaded automatically from
+    environment variables. External callers never need to handle keys.
+    
     This class provides:
+    - Automatic API key loading from environment variables
     - Automatic API key rotation on failure
     - Retry logic for empty responses
     - Consistent error handling
     
-    Subclasses only need to implement:
+    Subclasses must define:
+    - ENV_VAR_NAME: Class-level constant for the env var name (e.g., "GROQ_API_KEYS")
     - _initialize_client(api_key): Set up the provider client
     - _do_chat(session): Raw chat call
     - _do_chat_async(session): Raw async chat call
@@ -146,24 +149,55 @@ class BaseLLM(ABC):
     
     Usage:
         class MyLLM(BaseLLM):
+            ENV_VAR_NAME = "MY_API_KEYS"
             def _do_chat(self, session):
                 # Raw API call implementation
                 pass
     """
     
+    ENV_VAR_NAME: str = ""  # Subclasses must override with their env var name
+    
     def __init__(self, config: LLMConfig):
         """
         Initialize the LLM with the given configuration.
         
+        If config.api_keys is not provided, keys are automatically loaded
+        from the environment variable specified by ENV_VAR_NAME.
+        
         Args:
-            config: LLMConfig instance with model settings and API keys
+            config: LLMConfig instance with model settings
         """
         self.config = config
         self._clients: dict[int, Any] = {}  # key_index -> client
         self._current_key_index = 0
         
+        # Self-provision API keys from environment if not explicitly provided
+        if not self.config.api_keys:
+            self.config.api_keys = self._load_api_keys_from_env()
+        
+        if not self.config.api_keys:
+            raise ValueError(
+                f"No API keys available for {self.__class__.__name__}. "
+                f"Set the {self.ENV_VAR_NAME} environment variable with "
+                f"comma-separated API keys."
+            )
+        
         # Initialize client with first key
         self._initialize_client(self.config.api_keys[0])
+    
+    def _load_api_keys_from_env(self) -> list[str]:
+        """
+        Load API keys from the environment variable.
+        
+        Reads ENV_VAR_NAME, splits by comma, strips whitespace.
+        
+        Returns:
+            List of API key strings (may be empty)
+        """
+        if not self.ENV_VAR_NAME:
+            return []
+        keys_str = os.getenv(self.ENV_VAR_NAME, "")
+        return [key.strip() for key in keys_str.split(",") if key.strip()]
     
     @abstractmethod
     def _initialize_client(self, api_key: str) -> None:
@@ -511,8 +545,8 @@ class BaseLLM(ABC):
         Raises:
             ValueError: If configuration is invalid
         """
-        if not self.config.api_key:
-            raise ValueError("API key is required")
+        if not self.config.api_keys:
+            raise ValueError("API keys are required")
         if not self.config.model:
             raise ValueError("Model name is required")
         if self.config.temperature < 0 or self.config.temperature > 2:

@@ -34,7 +34,7 @@ def demo_model_lookup():
     
     test_models = [
         "gemini-2.5-flash",
-        "llama-3.3-70b",  # Cerebras version
+        "llama3.1-8b",  # Cerebras
         "llama-3.3-70b-versatile",  # Groq version
         "gpt-oss-120b",  # Cerebras
         "openai/gpt-oss-120b",  # Groq
@@ -90,7 +90,7 @@ def demo_model_validation():
     test_cases = [
         ("gemini-2.5-flash", True),
         ("gpt-4", False),
-        ("llama-3.3-70b", True),
+        ("llama3.1-8b", True),
         ("claude-3", False),
     ]
     
@@ -107,25 +107,24 @@ def demo_factory_usage():
     print_section("5. Factory Usage with Auto-Detection")
     
     # Note: These examples show the API usage but won't actually create
-    # LLM instances without valid API keys
+    # LLM instances without valid API keys in environment variables
     
     examples = [
-        ("gemini-2.5-flash", "GOOGLE_API_KEY"),
-        ("llama-3.3-70b", "CEREBRAS_API_KEY"),
-        ("qwen/qwen3-32b", "GROQ_API_KEY"),
+        ("llama3.1-8b", "CEREBRAS_API_KEYS"),
+        ("qwen/qwen3-32b", "GROQ_API_KEYS"),
     ]
     
-    print("Example factory usage (requires API keys):\n")
+    print("Example factory usage (requires API keys in env vars):\n")
     
-    for model, key_name in examples:
+    for model, env_var in examples:
         provider = get_provider_for_model(model)
         if provider:
             print(f"Model: {model}")
             print(f"Provider: {provider.value}")
+            print(f"Env var: {env_var}")
             print(f"Code:")
             print(f'  llm = LLMFactory.from_model(')
-            print(f'      model="{model}",')
-            print(f'      api_key=os.getenv("{key_name}")')
+            print(f'      model="{model}"')
             print(f'  )')
             print()
 
@@ -136,18 +135,17 @@ def demo_ambiguous_models():
     
     print("The registry handles models with similar names across providers:\n")
     
-    # Llama models
-    print("Llama 3.3 70B variants:")
-    print(f"  • llama-3.3-70b (Cerebras)           → {get_provider_for_model('llama-3.3-70b')}")
-    print(f"  • llama-3.3-70b-versatile (Groq)     → {get_provider_for_model('llama-3.3-70b-versatile')}")
+    # Llama 3.1 8B variants
+    print("Llama 3.1 8B variants:")
+    print(f"  • llama3.1-8b (Cerebras)             → {get_provider_for_model('llama3.1-8b')}")
+    print(f"  • llama-3.1-8b-instant (Groq)        → {get_provider_for_model('llama-3.1-8b-instant')}")
     
-    print("\nOpenAI GPT OSS models:")
+    print("\nGPT OSS models:")
     print(f"  • gpt-oss-120b (Cerebras)            → {get_provider_for_model('gpt-oss-120b')}")
     print(f"  • openai/gpt-oss-120b (Groq)         → {get_provider_for_model('openai/gpt-oss-120b')}")
     
-    print("\nLlama 3.1 8B variants:")
-    print(f"  • llama3.1-8b (Cerebras)             → {get_provider_for_model('llama3.1-8b')}")
-    print(f"  • llama-3.1-8b-instant (Groq)        → {get_provider_for_model('llama-3.1-8b-instant')}")
+    print("\nLlama 3.3 70B (Groq only):")
+    print(f"  • llama-3.3-70b-versatile (Groq)     → {get_provider_for_model('llama-3.3-70b-versatile')}")
 
 
 def demo_search_models():

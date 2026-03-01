@@ -1,7 +1,6 @@
 """LLM module containing base class and provider implementations."""
 
 from .base import BaseLLM, LLMConfig, LLMResponse, LLMProvider
-from .proprietary_llms.gemini_llm import GeminiLLM
 from .proprietary_llms.groq_llm import GroqLLM
 from .proprietary_llms.cerebras_llm import CerebrasLLM
 from .factory import LLMFactory
@@ -19,7 +18,6 @@ __all__ = [
     "LLMConfig",
     "LLMResponse",
     "LLMProvider",
-    "GeminiLLM",
     "GroqLLM",
     "CerebrasLLM",
     "LLMFactory",

@@ -2,10 +2,10 @@
 Example usage of the ChatServer LLM abstraction layer.
 
 This file demonstrates how to use the generic LLM interface
-with different providers.
+with different providers. API keys are loaded automatically
+from environment variables (GROQ_API_KEYS, CEREBRAS_API_KEYS).
 """
 
-import os
 from dotenv import load_dotenv
 from ChatService.Chat import (
     ChatSession,
@@ -36,7 +36,6 @@ def example_basic_usage():
     llm = LLMFactory.create(
         provider=LLMProvider.GROQ,
         model="llama-3.3-70b-versatile",
-        api_key=os.getenv("GROQ_API_KEY", ""),
     )
     
     # Get response
@@ -66,7 +65,6 @@ def example_different_providers():
     groq_llm = LLMFactory.create(
         provider=LLMProvider.GROQ,
         model="llama-3.3-70b-versatile",
-        api_key=os.getenv("GROQ_API_KEY", ""),
     )
     response = groq_llm.chat(session)
     print(f"Groq Response: {response.content[:200]}...")
@@ -76,8 +74,7 @@ def example_different_providers():
     print("\n--- Using Cerebras ---")
     cerebras_llm = LLMFactory.create(
         provider=LLMProvider.CEREBRAS,
-        model="llama-3.3-70b",
-        api_key=os.getenv("CEREBRAS_API_KEY", ""),
+        model="llama3.1-8b",
     )
     response = cerebras_llm.chat(session)
     print(f"Cerebras Response: {response.content[:200]}...")
@@ -96,7 +93,6 @@ def example_streaming():
     llm = LLMFactory.create(
         provider=LLMProvider.CEREBRAS,
         model="llama3.1-8b",
-        api_key=os.getenv("CEREBRAS_API_KEY", ""),
     )
     
     # Stream the response
@@ -121,8 +117,7 @@ async def example_async_usage():
     # Using Cerebras for async operations
     llm = LLMFactory.create(
         provider=LLMProvider.CEREBRAS,
-        model="llama-3.3-70b",
-        api_key=os.getenv("CEREBRAS_API_KEY", ""),
+        model="llama3.1-8b",
     )
     
     # Async chat
@@ -175,16 +170,15 @@ def example_session_management():
 
 def example_direct_llm_instantiation():
     """Example showing direct LLM instantiation without factory."""
-    # Create config for Groq
+    # Create config for Groq (keys loaded from GROQ_API_KEYS env var automatically)
     config = LLMConfig(
         model="llama-3.3-70b-versatile",
-        api_key=os.getenv("GROQ_API_KEY", ""),
         temperature=0.8,
         max_tokens=2048,
         top_p=0.9,
     )
     
-    # Direct instantiation
+    # Direct instantiation — keys auto-loaded from env
     llm = GroqLLM(config)
     
     # Create session and use

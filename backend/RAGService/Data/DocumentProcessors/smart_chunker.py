@@ -15,12 +15,11 @@ Usage:
     chunker = SmartChunker()
     chunks = chunker.chunk_file("report.pdf")
     
-    # With LLM analysis
+    # With LLM analysis (keys loaded from env automatically)
     config = SmartChunkerConfig(
         use_llm_analysis=True,
         llm_provider="groq",
         llm_model="llama-3.1-8b-instant",
-        llm_api_keys=["key1"],
     )
     chunker = SmartChunker(config)
     chunks = chunker.chunk_file("report.pdf")
@@ -71,9 +70,8 @@ class SmartChunkerConfig:
         max_chunk_size: Global default max chunk size (characters).
         chunk_overlap: Global default overlap between chunks.
         use_llm_analysis: Whether to invoke LLM structural analysis.
-        llm_provider: LLM provider name ("groq", "cerebras", "gemini").
+        llm_provider: LLM provider name ("groq", "cerebras").
         llm_model: LLM model name (e.g. "llama-3.1-8b-instant").
-        llm_api_keys: API keys for the LLM provider.
         llm_temperature: Temperature for LLM calls (0.0 recommended).
         
         Per-format overrides (None = use global defaults):
@@ -90,7 +88,6 @@ class SmartChunkerConfig:
     use_llm_analysis: bool = False
     llm_provider: Optional[str] = None
     llm_model: Optional[str] = None
-    llm_api_keys: Optional[List[str]] = None
     llm_temperature: float = 0.0
     
     # Per-format overrides
@@ -310,7 +307,6 @@ class SmartChunker:
             llm = LLMFactory.create(
                 provider=provider,
                 model=self.config.llm_model or "llama-3.1-8b-instant",
-                api_keys=self.config.llm_api_keys or [],
                 temperature=self.config.llm_temperature,
             )
             

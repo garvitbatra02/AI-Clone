@@ -6,6 +6,9 @@ This module provides a centralized service for chat inference that:
 - Delegates key rotation and retry logic to the LLM layer (BaseLLM)
 - Provides a simple interface for FastAPI server to call
 
+API keys are fully encapsulated inside the LLM layer. This service
+never touches, passes, or even knows about API keys.
+
 Usage:
     from ChatServer.services import chat_inference, get_chat_service
     
@@ -25,7 +28,6 @@ import threading
 from ..llm.base import BaseLLM, LLMConfig, LLMResponse, LLMProvider, AllKeysFailedError
 from ..llm.model_registry import get_provider_for_model
 from ..llm.factory import LLMFactory
-from ..llm.api_key_manager import get_api_key_manager
 from ..session.chat_session import ChatSession
 
 # Configure logging
@@ -47,15 +49,9 @@ class AllProvidersFailedError(Exception):
 
 @dataclass
 class ProviderConfig:
-    """Configuration for an LLM provider with multiple API keys."""
+    """Configuration for an LLM provider."""
     provider: LLMProvider
     default_model: str
-    api_keys_env: str  # Environment variable name for comma-separated API keys
-    
-    def get_api_keys(self) -> list[str]:
-        """Get list of API keys from environment variable (comma-separated)."""
-        api_key_manager = get_api_key_manager()
-        return api_key_manager.get_api_keys(self.provider, self.api_keys_env)
 
 
 # Default provider configurations for rotation
@@ -63,12 +59,10 @@ DEFAULT_PROVIDERS = [
     ProviderConfig(
         provider=LLMProvider.GROQ,
         default_model="llama-3.3-70b-versatile",
-        api_keys_env="GROQ_API_KEYS",
     ),
     ProviderConfig(
         provider=LLMProvider.CEREBRAS,
-        default_model="llama-3.3-70b",
-        api_keys_env="CEREBRAS_API_KEYS",
+        default_model="llama3.1-8b",
     ),
 ]
 
@@ -123,7 +117,7 @@ class ChatService:
         """
         Get cached LLM instance or create a new one.
         
-        LLM instances have built-in key rotation and retry logic.
+        LLM instances handle their own API key loading and rotation internally.
         
         Args:
             config: Provider configuration.
@@ -136,14 +130,9 @@ class ChatService:
         cache_key = (config.provider, model_to_use)
         
         if cache_key not in self._llm_cache:
-            api_keys = config.get_api_keys()
-            if not api_keys:
-                raise ValueError(f"No API keys configured for {config.provider.value}")
-            
             llm = LLMFactory.create(
                 provider=config.provider,
                 model=model_to_use,
-                api_keys=api_keys,  # Multiple keys for resilience
                 temperature=self._temperature,
                 max_tokens=self._max_tokens,
                 max_retries=self._max_retries,

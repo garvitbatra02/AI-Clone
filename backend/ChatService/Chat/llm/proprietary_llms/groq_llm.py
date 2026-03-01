@@ -14,8 +14,9 @@ class GroqLLM(BaseLLM):
     """
     Groq LLM implementation using LangChain for fast inference.
     
-    Resilience features (key rotation, retry on empty) are inherited from BaseLLM.
-    This class only implements the raw API calls.
+    API keys are loaded automatically from the GROQ_API_KEYS environment
+    variable. Resilience features (key rotation, retry on empty) are
+    inherited from BaseLLM.
     
     Supports models like:
     - llama-3.3-70b-versatile
@@ -25,14 +26,12 @@ class GroqLLM(BaseLLM):
     - gemma-7b-it
     
     Example:
-        config = LLMConfig(
-            model="llama-3.1-70b-versatile",
-            api_keys=["key1", "key2", "key3"],  # Multiple keys for resilience
-            temperature=0.7
-        )
-        llm = GroqLLM(config)
+        config = LLMConfig(model="llama-3.1-70b-versatile")
+        llm = GroqLLM(config)  # Keys loaded from GROQ_API_KEYS env var
         response = llm.chat(session)  # Automatic key rotation on failure
     """
+    
+    ENV_VAR_NAME = "GROQ_API_KEYS"
     
     def _initialize_client(self, api_key: str) -> None:
         """Initialize the LangChain ChatGroq client with given API key."""

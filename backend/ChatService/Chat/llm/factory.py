@@ -2,12 +2,13 @@
 LLM Factory for creating LLM instances.
 
 Provides a unified interface for creating LLM instances based on provider type.
-Supports both single API key and multiple API keys for resilience.
+API keys are fully encapsulated inside the LLM layer — the factory never
+touches or passes API keys. Each LLM subclass self-provisions keys from
+its designated environment variable.
 """
 
 from typing import Optional, Type, Union
 from .base import BaseLLM, LLMConfig, LLMProvider
-from .proprietary_llms.gemini_llm import GeminiLLM
 from .proprietary_llms.groq_llm import GroqLLM
 from .proprietary_llms.cerebras_llm import CerebrasLLM
 from .model_registry import get_provider_for_model
@@ -15,31 +16,26 @@ from .model_registry import get_provider_for_model
 
 class LLMFactory:
     """
-    Factory class for creating LLM instances with built-in resilience.
+    Factory class for creating LLM instances.
     
     This class provides a centralized way to create LLM instances
-    based on the provider type or model name. Supports multiple API keys
-    for automatic key rotation and retry on failure.
+    based on the provider type or model name. API keys are handled
+    internally by each LLM subclass — the factory is completely
+    key-agnostic.
     
     Example:
-        # Create with single API key
-        llm = LLMFactory.create(
-            provider=LLMProvider.GEMINI,
-            model="gemini-2.5-flash",
-            api_key="your-api-key"
-        )
-        
-        # Create with multiple API keys (resilient)
+        # Create by provider
         llm = LLMFactory.create(
             provider=LLMProvider.GROQ,
-            model="llama-3.3-70b-versatile",
-            api_keys=["key1", "key2", "key3"]  # Auto-rotation on failure
+            model="llama-3.3-70b-versatile"
         )
+        
+        # Create by model name (auto-detect provider)
+        llm = LLMFactory.from_model(model="llama-3.3-70b-versatile")
     """
     
     # Mapping of providers to their LLM classes
     _provider_map: dict[LLMProvider, Type[BaseLLM]] = {
-        LLMProvider.GEMINI: GeminiLLM,
         LLMProvider.GROQ: GroqLLM,
         LLMProvider.CEREBRAS: CerebrasLLM,
     }
@@ -49,8 +45,6 @@ class LLMFactory:
         cls,
         provider: LLMProvider,
         model: str,
-        api_key: Optional[str] = None,
-        api_keys: Optional[list[str]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
         max_retries: int = 2,
@@ -59,11 +53,12 @@ class LLMFactory:
         """
         Create an LLM instance for the specified provider.
         
+        API keys are loaded automatically by the LLM from its
+        environment variable. No key parameters needed.
+        
         Args:
             provider: The LLM provider
             model: The model identifier
-            api_key: Single API key (for backward compatibility)
-            api_keys: List of API keys for resilience (preferred)
             temperature: Sampling temperature
             max_tokens: Maximum tokens in response
             max_retries: Max retry attempts on empty response
@@ -73,21 +68,13 @@ class LLMFactory:
             An initialized LLM instance with built-in resilience
             
         Raises:
-            ValueError: If the provider is not supported or no API keys provided
+            ValueError: If the provider is not supported
         """
         if provider not in cls._provider_map:
             raise ValueError(f"Unsupported provider: {provider}")
         
-        # Handle API keys - support both single key and list
-        if api_keys is None and api_key is None:
-            raise ValueError("Either api_key or api_keys must be provided")
-        
-        if api_keys is None:
-            api_keys = [api_key]
-        
         config = LLMConfig(
             model=model,
-            api_keys=api_keys,
             max_retries=max_retries,
             temperature=temperature,
             max_tokens=max_tokens,
@@ -101,8 +88,6 @@ class LLMFactory:
     def from_model(
         cls,
         model: str,
-        api_key: Optional[str] = None,
-        api_keys: Optional[list[str]] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
         max_retries: int = 2,
@@ -114,8 +99,6 @@ class LLMFactory:
         
         Args:
             model: The model identifier
-            api_key: Single API key (for backward compatibility)
-            api_keys: List of API keys for resilience (preferred)
             temperature: Sampling temperature
             max_tokens: Maximum tokens in response
             max_retries: Max retry attempts on empty response
@@ -140,8 +123,6 @@ class LLMFactory:
         return cls.create(
             provider=provider,
             model=model,
-            api_key=api_key,
-            api_keys=api_keys,
             temperature=temperature,
             max_tokens=max_tokens,
             max_retries=max_retries,

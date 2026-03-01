@@ -273,7 +273,7 @@ def example_12_cerebras_specific_model():
         response = chat_inference(
             session,
             provider=LLMProvider.CEREBRAS,
-            model="llama-3.3-70b",
+            model="llama3.1-8b",
             fallback=True
         )
         print(f"✅ Response: {response.content}")

@@ -54,13 +54,11 @@ def _get_groq_keys() -> list[str]:
 
 def _make_llm():
     """Create a cheap fast Groq LLM for testing."""
-    keys = _get_groq_keys()
-    if not keys:
+    if not _get_groq_keys():
         return None
     return LLMFactory.create(
         provider=LLMProvider.GROQ,
         model="llama-3.1-8b-instant",
-        api_keys=keys,
         temperature=0.0,
         max_tokens=2048,
     )
@@ -278,7 +276,7 @@ def test_llm_topical_analysis(llm):
     return result
 
 
-def test_e2e_smart_chunker_structural(groq_keys):
+def test_e2e_smart_chunker_structural():
     """
     Test 3: Full e2e — SmartChunker with LLM enabled on a
     structured PDF-like document. Chunks should reflect section
@@ -294,7 +292,6 @@ def test_e2e_smart_chunker_structural(groq_keys):
         use_llm_analysis=True,
         llm_provider="groq",
         llm_model="llama-3.1-8b-instant",
-        llm_api_keys=groq_keys,
     )
     chunker = SmartChunker(config)
 
@@ -320,7 +317,7 @@ def test_e2e_smart_chunker_structural(groq_keys):
     return chunks
 
 
-def test_e2e_smart_chunker_topical(groq_keys):
+def test_e2e_smart_chunker_topical():
     """
     Test 4: Full e2e — SmartChunker with LLM enabled on plain text.
     Chunks should get topic labels.
@@ -335,7 +332,6 @@ def test_e2e_smart_chunker_topical(groq_keys):
         use_llm_analysis=True,
         llm_provider="groq",
         llm_model="llama-3.1-8b-instant",
-        llm_api_keys=groq_keys,
     )
     chunker = SmartChunker(config)
 
@@ -400,7 +396,7 @@ def test_e2e_smart_chunker_no_llm_comparison():
     return pdf_chunks, txt_chunks
 
 
-def test_e2e_csv_and_json_unchanged(groq_keys):
+def test_e2e_csv_and_json_unchanged():
     """
     Test 6: CSV and JSON go through their own strategies even when
     LLM is enabled. Verify they are unaffected.
@@ -413,7 +409,6 @@ def test_e2e_csv_and_json_unchanged(groq_keys):
         use_llm_analysis=True,
         llm_provider="groq",
         llm_model="llama-3.1-8b-instant",
-        llm_api_keys=groq_keys,
     )
     chunker = SmartChunker(config)
 
@@ -471,7 +466,7 @@ def main():
     llm = _make_llm()
     assert llm is not None
 
-    print(f"\n🔑 Using {len(groq_keys)} Groq API key(s)")
+    print(f"\n🔑 Groq API key(s) found")
     print(f"🤖 Model: llama-3.1-8b-instant\n")
 
     # Test 1: Raw structural analysis
@@ -481,16 +476,16 @@ def main():
     test_llm_topical_analysis(llm)
 
     # Test 3: Full e2e structural chunking
-    structural_chunks = test_e2e_smart_chunker_structural(groq_keys)
+    structural_chunks = test_e2e_smart_chunker_structural()
 
     # Test 4: Full e2e topical chunking
-    topical_chunks = test_e2e_smart_chunker_topical(groq_keys)
+    topical_chunks = test_e2e_smart_chunker_topical()
 
     # Test 5: Baseline (no LLM) for comparison
     baseline_pdf, baseline_txt = test_e2e_smart_chunker_no_llm_comparison()
 
     # Test 6: CSV & JSON unaffected
-    test_e2e_csv_and_json_unchanged(groq_keys)
+    test_e2e_csv_and_json_unchanged()
 
     # Summary comparison
     print("\n" + "=" * 70)

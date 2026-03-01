@@ -76,13 +76,7 @@ MODEL_REGISTRY: Dict[str, LLMProvider] = {
     # ===== CEREBRAS MODELS =====
     # Production Models
     "llama3.1-8b": LLMProvider.CEREBRAS,
-    "llama-3.3-70b": LLMProvider.CEREBRAS,
     "gpt-oss-120b": LLMProvider.CEREBRAS,
-    "qwen-3-32b": LLMProvider.CEREBRAS,
-    
-    # Preview Models
-    "qwen-3-235b-a22b-instruct-2507": LLMProvider.CEREBRAS,
-    "zai-glm-4.6": LLMProvider.CEREBRAS,
 }
 
 
@@ -102,7 +96,7 @@ def get_provider_for_model(model: str) -> LLMProvider | None:
     Example:
         >>> get_provider_for_model("gemini-2.5-flash")
         <LLMProvider.GEMINI: 'gemini'>
-        >>> get_provider_for_model("llama-3.3-70b")
+        >>> get_provider_for_model("llama3.1-8b")
         <LLMProvider.CEREBRAS: 'cerebras'>
         >>> get_provider_for_model("unknown-model")
         None
