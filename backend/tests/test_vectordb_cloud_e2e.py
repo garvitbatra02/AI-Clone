@@ -42,7 +42,6 @@ load_dotenv()
 
 from RAGService.Data.VectorDB import (
     VectorDBFactory,
-    VectorDBConfig,
     VectorDBProvider,
     DistanceMetric,
     DocumentChunk,
@@ -74,17 +73,14 @@ def _prefixed(name: str) -> str:
 # ── Helpers ──────────────────────────────────────────────────────
 
 def _make_db(collection: str = COLLECTION):
-    """Create a Qdrant Cloud instance via direct config (REST, not gRPC)."""
-    config = VectorDBConfig(
+    """Create a Qdrant Cloud instance (REST, not gRPC)."""
+    return VectorDBFactory.create_from_env(
         provider=VectorDBProvider.QDRANT,
         collection_name=collection,
         embedding_dimension=DIM,
-        url=QDRANT_URL,
         distance_metric=DistanceMetric.COSINE,
         prefer_grpc=False,           # REST is more reliable for cloud
-        extra_config={},
     )
-    return VectorDBFactory.create(config)
 
 
 def _rand_vec(dim: int = DIM) -> List[float]:

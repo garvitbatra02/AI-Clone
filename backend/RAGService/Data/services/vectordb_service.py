@@ -19,7 +19,6 @@ from RAGService.Data.VectorDB import (
     MetadataFilter,
     MetadataFilterGroup,
     SearchResult,
-    VectorDBConfig,
     VectorDBFactory,
     VectorDBProvider,
 )
@@ -41,7 +40,7 @@ class VectorDBServiceConfig:
         vectordb_provider: Vector database provider to use
         embedding_provider: Embedding model provider to use
         collection_name: Default collection name
-        vectordb_url: URL for vector database (None = in-memory mode)
+        in_memory: Whether to use in-memory storage (True) or cloud (False)
         embedding_model: Embedding model name
         distance_metric: Distance metric for similarity
         auto_create_collection: Whether to auto-create collection if not exists
@@ -49,7 +48,7 @@ class VectorDBServiceConfig:
     vectordb_provider: VectorDBProvider = VectorDBProvider.QDRANT
     embedding_provider: EmbeddingProvider = EmbeddingProvider.COHERE
     collection_name: str = "default"
-    vectordb_url: Optional[str] = None
+    in_memory: bool = False
     embedding_model: Optional[str] = None
     distance_metric: DistanceMetric = DistanceMetric.COSINE
     auto_create_collection: bool = True
@@ -65,7 +64,7 @@ class VectorDBServiceConfig:
                 os.environ.get("EMBEDDING_PROVIDER", "cohere")
             ),
             collection_name=collection_name,
-            vectordb_url=os.environ.get("QDRANT_URL"),
+            in_memory=os.environ.get("VECTORDB_IN_MEMORY", "false").lower() == "true",
             embedding_model=os.environ.get("EMBEDDING_MODEL"),
         )
 
@@ -82,7 +81,6 @@ class VectorDBService:
         service = VectorDBService(
             config=VectorDBServiceConfig(
                 collection_name="my_docs",
-                vectordb_url="http://localhost:6333"
             )
         )
         
@@ -150,22 +148,13 @@ class VectorDBService:
     
     def _create_vectordb(self) -> BaseVectorDB:
         """Create VectorDB instance from config."""
-        if self.config.vectordb_provider == VectorDBProvider.QDRANT:
-            return VectorDBFactory.create_qdrant(
-                collection_name=self.config.collection_name,
-                embedding_dimension=self._embeddings.dimension,
-                distance_metric=self.config.distance_metric,
-                in_memory=(self.config.vectordb_url is None)
-            )
-        else:
-            vectordb_config = VectorDBConfig(
-                provider=self.config.vectordb_provider,
-                collection_name=self.config.collection_name,
-                embedding_dimension=self._embeddings.dimension,
-                url=self.config.vectordb_url,
-                distance_metric=self.config.distance_metric,
-            )
-            return VectorDBFactory.create(vectordb_config)
+        return VectorDBFactory.create_from_env(
+            provider=self.config.vectordb_provider,
+            collection_name=self.config.collection_name,
+            embedding_dimension=self._embeddings.dimension,
+            distance_metric=self.config.distance_metric,
+            in_memory=self.config.in_memory,
+        )
     
     def _ensure_collection_exists(self) -> None:
         """Ensure the collection exists, creating if necessary."""

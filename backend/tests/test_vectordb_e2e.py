@@ -50,7 +50,8 @@ COLLECTION = "test_collection"
 
 def _make_db(collection: str = COLLECTION):
     """Create an in-memory Qdrant instance."""
-    return VectorDBFactory.create_qdrant(
+    return VectorDBFactory.create_from_env(
+        provider=VectorDBProvider.QDRANT,
         collection_name=collection,
         embedding_dimension=DIM,
         in_memory=True,

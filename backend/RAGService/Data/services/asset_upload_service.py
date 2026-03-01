@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 from RAGService.Data.VectorDB import (
     BaseVectorDB,
     DocumentChunk,
-    VectorDBConfig,
     VectorDBFactory,
     VectorDBProvider,
     DistanceMetric,
@@ -68,7 +67,7 @@ class AssetUploadConfig:
     Attributes:
         vectordb_provider: Vector database provider
         embedding_provider: Embedding model provider
-        vectordb_url: URL for vector database (None = in-memory mode)
+        in_memory: Whether to use in-memory storage (True) or cloud (False)
         embedding_model: Embedding model name
         chunk_size: Size of text chunks
         chunk_overlap: Overlap between chunks
@@ -77,7 +76,7 @@ class AssetUploadConfig:
     """
     vectordb_provider: VectorDBProvider = VectorDBProvider.QDRANT
     embedding_provider: EmbeddingProvider = EmbeddingProvider.COHERE
-    vectordb_url: Optional[str] = None
+    in_memory: bool = False
     embedding_model: Optional[str] = None
     chunk_size: int = 1000
     chunk_overlap: int = 200
@@ -101,7 +100,7 @@ class AssetUploadConfig:
             embedding_provider=EmbeddingProvider(
                 os.environ.get("EMBEDDING_PROVIDER", "cohere")
             ),
-            vectordb_url=os.environ.get("QDRANT_URL"),
+            in_memory=os.environ.get("VECTORDB_IN_MEMORY", "false").lower() == "true",
             embedding_model=os.environ.get("EMBEDDING_MODEL"),
             chunk_size=int(os.environ.get("CHUNK_SIZE", "1000")),
             chunk_overlap=int(os.environ.get("CHUNK_OVERLAP", "200")),
@@ -123,7 +122,6 @@ class AssetUploadService:
         # Create service
         service = AssetUploadService(
             config=AssetUploadConfig(
-                vectordb_url="http://localhost:6333",
                 default_collection="my_docs"
             )
         )
@@ -205,22 +203,13 @@ class AssetUploadService:
     
     def _create_vectordb(self) -> BaseVectorDB:
         """Create VectorDB instance from config."""
-        if self.config.vectordb_provider == VectorDBProvider.QDRANT:
-            return VectorDBFactory.create_qdrant(
-                collection_name=self.config.default_collection,
-                embedding_dimension=self._embeddings.dimension,
-                distance_metric=self.config.distance_metric,
-                in_memory=(self.config.vectordb_url is None)
-            )
-        else:
-            vectordb_config = VectorDBConfig(
-                provider=self.config.vectordb_provider,
-                collection_name=self.config.default_collection,
-                embedding_dimension=self._embeddings.dimension,
-                url=self.config.vectordb_url,
-                distance_metric=self.config.distance_metric,
-            )
-            return VectorDBFactory.create(vectordb_config)
+        return VectorDBFactory.create_from_env(
+            provider=self.config.vectordb_provider,
+            collection_name=self.config.default_collection,
+            embedding_dimension=self._embeddings.dimension,
+            distance_metric=self.config.distance_metric,
+            in_memory=self.config.in_memory,
+        )
     
     def _ensure_collection(self, collection_name: str) -> None:
         """Ensure a collection exists, creating if necessary."""

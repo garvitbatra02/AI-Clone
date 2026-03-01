@@ -29,25 +29,26 @@ class VectorDBFactory:
     objects or environment variables.
     
     Example:
-        # Create from config
+        # Create from config object
         config = VectorDBConfig.for_qdrant(
             collection_name="my_collection",
             embedding_dimension=768,
         )
         db = VectorDBFactory.create(config)
         
-        # Create from environment
+        # Create with inline params (provider resolves secrets from env)
         db = VectorDBFactory.create_from_env(
             provider=VectorDBProvider.QDRANT,
             collection_name="my_collection",
-            embedding_dimension=768
+            embedding_dimension=768,
+            in_memory=True,
         )
     """
     
     @staticmethod
     def create(config: VectorDBConfig) -> BaseVectorDB:
         """
-        Create a vector database instance from configuration.
+        Create a vector database instance from a pre-built configuration.
         
         Args:
             config: VectorDBConfig with connection details
@@ -67,73 +68,47 @@ class VectorDBFactory:
         collection_name: str,
         embedding_dimension: int,
         distance_metric: DistanceMetric = DistanceMetric.COSINE,
+        timeout: Optional[int] = None,
+        prefer_grpc: Optional[bool] = None,
         **extra_config
     ) -> BaseVectorDB:
         """
-        Create a vector database instance from environment variables.
+        Create a vector database instance with inline parameters.
         
-        The provider implementation resolves its own API key and URL
-        from environment variables when not explicitly provided in config.
+        Builds a VectorDBConfig and delegates to create(). The provider
+        implementation resolves its own API key and URL from environment
+        variables.
+        
+        Provider-specific options (e.g. in_memory, path for Qdrant) are
+        passed through **extra_config.
         
         Args:
             provider: The vector database provider
             collection_name: Name of the collection
             embedding_dimension: Dimension of embedding vectors
             distance_metric: Distance metric for similarity
-            **extra_config: Additional provider-specific configuration
+            timeout: Connection timeout in seconds (default: 30)
+            prefer_grpc: Whether to prefer gRPC over HTTP (default: True)
+            **extra_config: Provider-specific config (e.g. in_memory, path)
             
         Returns:
             Configured BaseVectorDB instance
         """
+        # Build optional kwargs so VectorDBConfig defaults are preserved
+        # when the caller doesn't explicitly override them.
+        optional: Dict[str, Any] = {}
+        if timeout is not None:
+            optional["timeout"] = timeout
+        if prefer_grpc is not None:
+            optional["prefer_grpc"] = prefer_grpc
+        
         config = VectorDBConfig(
             provider=provider,
             collection_name=collection_name,
             embedding_dimension=embedding_dimension,
             distance_metric=distance_metric,
-            extra_config=extra_config
-        )
-        
-        return VectorDBFactory.create(config)
-    
-    @staticmethod
-    def create_qdrant(
-        collection_name: str,
-        embedding_dimension: int,
-        distance_metric: DistanceMetric = DistanceMetric.COSINE,
-        in_memory: bool = False,
-        path: Optional[str] = None,
-        **extra_config
-    ) -> BaseVectorDB:
-        """
-        Convenience method to create a Qdrant instance.
-        
-        The Qdrant provider resolves its own URL and API key from
-        environment variables (QDRANT_URL, QDRANT_API_KEY) when not
-        explicitly provided in config.
-        
-        Args:
-            collection_name: Name of the collection
-            embedding_dimension: Dimension of embedding vectors
-            distance_metric: Distance metric for similarity
-            in_memory: Use in-memory storage (for testing)
-            path: Local file path for persistent storage
-            **extra_config: Additional configuration
-            
-        Returns:
-            Configured QdrantVectorDB instance
-        """
-        extra = {
-            "in_memory": in_memory,
-            "path": path,
-            **extra_config
-        }
-        
-        config = VectorDBConfig(
-            provider=VectorDBProvider.QDRANT,
-            collection_name=collection_name,
-            embedding_dimension=embedding_dimension,
-            distance_metric=distance_metric,
-            extra_config=extra
+            extra_config=extra_config,
+            **optional
         )
         
         return VectorDBFactory.create(config)

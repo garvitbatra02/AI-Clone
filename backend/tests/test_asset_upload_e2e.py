@@ -44,7 +44,6 @@ load_dotenv()
 from RAGService.Data.VectorDB import (
     BaseVectorDB,
     DocumentChunk,
-    VectorDBConfig,
     VectorDBFactory,
     VectorDBProvider,
     DistanceMetric,
@@ -153,7 +152,8 @@ def _build_inmemory_service(
     """
     embeddings = _build_embeddings()
 
-    vectordb = VectorDBFactory.create_qdrant(
+    vectordb = VectorDBFactory.create_from_env(
+        provider=VectorDBProvider.QDRANT,
         collection_name=collection,
         embedding_dimension=EMBEDDING_DIM,
         in_memory=True,
@@ -184,21 +184,18 @@ def _build_cloud_service(
     """
     Build an AssetUploadService backed by Qdrant Cloud.
 
-    IMPORTANT: We inject a pre-built VectorDB with prefer_grpc=False
-    because VectorDBFactory.create_qdrant() doesn't expose that param
-    and the default (True) hangs on cloud.
+    IMPORTANT: We set prefer_grpc=False because the default (True)
+    hangs on cloud.
     """
     embeddings = _build_embeddings()
 
-    cloud_config = VectorDBConfig(
+    vectordb = VectorDBFactory.create_from_env(
         provider=VectorDBProvider.QDRANT,
         collection_name=collection,
         embedding_dimension=EMBEDDING_DIM,
-        url=QDRANT_URL,
         distance_metric=DistanceMetric.COSINE,
         prefer_grpc=False,  # REST — gRPC hangs on cloud
     )
-    vectordb = VectorDBFactory.create(cloud_config)
 
     config = AssetUploadConfig(
         default_collection=collection,
