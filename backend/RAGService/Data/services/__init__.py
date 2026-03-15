@@ -12,6 +12,8 @@ from RAGService.Data.services.vectordb_service import (
 from RAGService.Data.services.asset_upload_service import (
     AssetUploadService,
     AssetUploadConfig,
+    UploadPreview,
+    UploadResult,
     get_asset_upload_service,
 )
 from RAGService.Data.services.retrieval_service import (
@@ -32,6 +34,8 @@ __all__ = [
     "get_vectordb_service",
     "AssetUploadService",
     "AssetUploadConfig",
+    "UploadPreview",
+    "UploadResult",
     "get_asset_upload_service",
     "RetrievalService",
     "RetrievalConfig",

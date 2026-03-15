@@ -17,6 +17,9 @@ from .routes.chat import router as chat_router
 from .routes.rag import router as rag_router
 from .models.schemas import HealthResponse, ServiceInfoResponse
 
+# Asset Upload Dashboard routers
+from AssetUploadService.Server.main import get_asset_routers
+
 # Load environment variables
 load_dotenv()
 
@@ -74,6 +77,18 @@ async def lifespan(app: FastAPI):
             logger.warning(f"VectorDB connectivity check failed: {e}")
     except Exception as e:
         logger.warning(f"RAG service initialization skipped: {e}")
+    
+    # Initialize the Asset Upload Dashboard service
+    try:
+        from AssetUploadService.services.dashboard_service import get_dashboard_service
+        dashboard_service = get_dashboard_service()
+        supported = dashboard_service.core.get_supported_file_types()
+        logger.info(
+            f"Asset Upload Dashboard initialized — "
+            f"supported types: {supported}"
+        )
+    except Exception as e:
+        logger.warning(f"Asset Upload Dashboard initialization skipped: {e}")
     
     yield
     
@@ -133,6 +148,10 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(chat_router, prefix="/api")
     app.include_router(rag_router, prefix="/api")
+    
+    # Asset Upload Dashboard routers
+    for asset_router in get_asset_routers():
+        app.include_router(asset_router, prefix="/api")
     
     # Health check endpoint
     @app.get(

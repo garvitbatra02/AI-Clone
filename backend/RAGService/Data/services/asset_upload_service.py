@@ -60,6 +60,32 @@ class UploadResult:
 
 
 @dataclass
+class UploadPreview:
+    """
+    Preview of what an upload would produce, without embedding or storing.
+    
+    Returned by preview_file() so the dashboard can show the user what
+    will happen before they commit to a full upload.
+    
+    Attributes:
+        file_name: Name of the source file
+        file_type: Detected file extension / type
+        file_size_bytes: Size of the file on disk
+        total_chunks: Number of chunks that would be created
+        estimated_tokens: Rough token estimate (~4 chars per token)
+        chunk_previews: Sample of the first N chunks with content snippets
+        metadata: Additional metadata about the preview
+    """
+    file_name: str
+    file_type: str
+    file_size_bytes: int
+    total_chunks: int = 0
+    estimated_tokens: int = 0
+    chunk_previews: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AssetUploadConfig:
     """
     Configuration for AssetUploadService.
@@ -800,6 +826,188 @@ class AssetUploadService:
         result = await self._vectordb.async_delete_collection(collection_name)
         self._created_collections.discard(collection_name)
         return result
+    
+    # ==================== Preview (Dashboard) ====================
+    
+    def preview_file(
+        self,
+        file_path: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+        max_preview_chunks: int = 5,
+        **loader_kwargs
+    ) -> "UploadPreview":
+        """
+        Preview what uploading a file would produce WITHOUT embedding or storing.
+        
+        Loads and chunks the file using the same pipeline as upload_file(),
+        but stops before the embed + store step.  This lets the dashboard
+        show the user chunk count, file type, estimated tokens, and sample
+        chunks before they commit to an upload.
+        
+        Args:
+            file_path: Path to the file
+            metadata: Additional metadata to pass to the loader
+            max_preview_chunks: Maximum number of chunk previews to return
+            **loader_kwargs: Additional arguments for the document loader
+            
+        Returns:
+            UploadPreview with file info and sample chunks
+            
+        Raises:
+            FileNotFoundError: If the file does not exist
+            ValueError: If the file type is not supported
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        
+        # Load + chunk (same logic as upload_file, minus embed & store)
+        if self._smart_chunker:
+            chunks = self._smart_chunker.chunk_file(
+                path, metadata=metadata, **loader_kwargs
+            )
+            file_type = path.suffix.lower().lstrip(".")
+        else:
+            doc = DocumentLoaderFactory.load(path, metadata, **loader_kwargs)
+            chunks = self._splitter.split_document(doc)
+            file_type = doc.file_type.value if doc.file_type else path.suffix.lower().lstrip(".")
+        
+        # Estimate tokens (~4 chars per token)
+        total_chars = sum(len(c.content) for c in chunks)
+        
+        # Build chunk previews
+        previews = []
+        for i, chunk in enumerate(chunks[:max_preview_chunks]):
+            previews.append({
+                "index": i,
+                "content_preview": chunk.content[:300] + ("..." if len(chunk.content) > 300 else ""),
+                "char_count": len(chunk.content),
+                "metadata": chunk.metadata,
+            })
+        
+        return UploadPreview(
+            file_name=path.name,
+            file_type=file_type,
+            file_size_bytes=path.stat().st_size,
+            total_chunks=len(chunks),
+            estimated_tokens=total_chars // 4,
+            chunk_previews=previews,
+            metadata={"source": str(path)},
+        )
+    
+    async def async_preview_file(
+        self,
+        file_path: Union[str, Path],
+        metadata: Optional[Dict[str, Any]] = None,
+        max_preview_chunks: int = 5,
+        **loader_kwargs
+    ) -> "UploadPreview":
+        """
+        Async version of preview_file.
+        
+        Loads and chunks the file without embedding or storing.
+        """
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {path}")
+        
+        if self._smart_chunker:
+            chunks = await self._smart_chunker.async_chunk_file(
+                path, metadata=metadata, **loader_kwargs
+            )
+            file_type = path.suffix.lower().lstrip(".")
+        else:
+            doc = await DocumentLoaderFactory.async_load(path, metadata, **loader_kwargs)
+            chunks = self._splitter.split_document(doc)
+            file_type = doc.file_type.value if doc.file_type else path.suffix.lower().lstrip(".")
+        
+        total_chars = sum(len(c.content) for c in chunks)
+        
+        previews = []
+        for i, chunk in enumerate(chunks[:max_preview_chunks]):
+            previews.append({
+                "index": i,
+                "content_preview": chunk.content[:300] + ("..." if len(chunk.content) > 300 else ""),
+                "char_count": len(chunk.content),
+                "metadata": chunk.metadata,
+            })
+        
+        return UploadPreview(
+            file_name=path.name,
+            file_type=file_type,
+            file_size_bytes=path.stat().st_size,
+            total_chunks=len(chunks),
+            estimated_tokens=total_chars // 4,
+            chunk_previews=previews,
+            metadata={"source": str(path)},
+        )
+    
+    # ==================== Collection Management (Dashboard) ====================
+    
+    def create_collection(self, collection_name: str) -> Dict[str, Any]:
+        """
+        Explicitly create a new collection.
+        
+        Unlike _ensure_collection (which is called implicitly during upload),
+        this method is designed for the dashboard to let users create
+        collections ahead of time.
+        
+        Args:
+            collection_name: Name of the collection to create
+            
+        Returns:
+            Dict with 'created' (bool), 'collection' (str), and optionally 'reason'
+        """
+        if self._vectordb.collection_exists(collection_name):
+            return {
+                "created": False,
+                "reason": "already_exists",
+                "collection": collection_name,
+            }
+        
+        self._vectordb.create_collection(
+            collection_name=collection_name,
+            dimension=self._embeddings.dimension,
+        )
+        self._created_collections.add(collection_name)
+        return {"created": True, "collection": collection_name}
+    
+    async def async_create_collection(self, collection_name: str) -> Dict[str, Any]:
+        """
+        Async version of create_collection.
+        
+        Args:
+            collection_name: Name of the collection to create
+            
+        Returns:
+            Dict with 'created' (bool), 'collection' (str), and optionally 'reason'
+        """
+        if await self._vectordb.async_collection_exists(collection_name):
+            return {
+                "created": False,
+                "reason": "already_exists",
+                "collection": collection_name,
+            }
+        
+        await self._vectordb.async_create_collection(
+            collection_name=collection_name,
+            dimension=self._embeddings.dimension,
+        )
+        self._created_collections.add(collection_name)
+        return {"created": True, "collection": collection_name}
+    
+    @staticmethod
+    def get_supported_file_types() -> List[str]:
+        """
+        List file extensions supported for upload.
+        
+        Delegates to DocumentLoaderFactory so the dashboard can show
+        which file types are accepted.
+        
+        Returns:
+            List of extension strings, e.g. ['txt', 'md', 'json', 'csv', 'pdf', 'docx']
+        """
+        return DocumentLoaderFactory.list_supported_extensions()
 
 
 # Global singleton instance
