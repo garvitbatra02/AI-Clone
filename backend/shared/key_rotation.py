@@ -21,6 +21,7 @@ API keys — everything is fully encapsulated.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import (
@@ -103,6 +104,15 @@ class KeyRotationMixin:
     """
 
     ENV_VAR_NAME: str = ""
+
+    # Strings that indicate a stale async client (event loop closed)
+    _STALE_LOOP_HINTS = ("event loop is closed", "loop is closed", "no running event loop")
+
+    @staticmethod
+    def _is_stale_loop_error(error_msg: str) -> bool:
+        """Return True if the error indicates a closed / stale event loop."""
+        low = error_msg.lower()
+        return any(h in low for h in KeyRotationMixin._STALE_LOOP_HINTS)
 
     # ------------------------------------------------------------------
     # Initialisation helpers
@@ -316,7 +326,37 @@ class KeyRotationMixin:
                 except AllKeysFailedError:
                     raise
                 except Exception as e:
-                    errors[key_index] = str(e)
+                    error_msg = str(e)
+
+                    # Stale async client from a previous event loop —
+                    # evict the cached client and retry this key once
+                    # with a freshly created client.
+                    if self._is_stale_loop_error(error_msg) and key_index in self._client_cache:
+                        del self._client_cache[key_index]
+                        logger.info(
+                            f"{service_label} key {key_index}: stale async "
+                            f"client detected, recreating…"
+                        )
+                        try:
+                            self._get_client_for_key(key_index)
+                            result = await operation()
+                            if is_valid(result):
+                                logger.info(
+                                    f"Successfully served async request using "
+                                    f"{service_label} key {key_index} "
+                                    f"(after client refresh)"
+                                )
+                                return result
+                            errors[key_index] = "Invalid/empty response after client refresh"
+                        except Exception as e2:
+                            errors[key_index] = str(e2)
+                            logger.warning(
+                                f"{service_label} key {key_index} failed "
+                                f"after client refresh: {e2}. Trying next key…"
+                            )
+                        continue
+
+                    errors[key_index] = error_msg
                     logger.warning(
                         f"{service_label} key {key_index} failed: {e}. "
                         f"Trying next key…"
