@@ -8,6 +8,7 @@ This package provides a generic interface for interacting with various LLM provi
 from .llm.base import BaseLLM, LLMConfig, LLMResponse, LLMProvider, AllKeysFailedError
 from .llm.proprietary_llms.groq_llm import GroqLLM
 from .llm.proprietary_llms.cerebras_llm import CerebrasLLM
+from .llm.proprietary_llms.cohere_llm import CohereLLM
 from .llm.factory import LLMFactory
 from .llm.model_registry import (
     MODEL_REGISTRY,
@@ -38,6 +39,7 @@ __all__ = [
     # LLM implementations
     "GroqLLM",
     "CerebrasLLM",
+    "CohereLLM",
     "LLMFactory",
     # Model registry
     "MODEL_REGISTRY",

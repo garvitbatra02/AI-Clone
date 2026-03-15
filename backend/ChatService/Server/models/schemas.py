@@ -9,6 +9,7 @@ class ProviderEnum(str, Enum):
     """Available LLM providers."""
     GROQ = "groq"
     CEREBRAS = "cerebras"
+    COHERE = "cohere"
 
 
 class MessageRole(str, Enum):
@@ -134,3 +135,176 @@ class ServiceInfoResponse(BaseModel):
     version: str = Field(..., description="API version")
     providers: list[str] = Field(..., description="Available providers")
     current_provider: str = Field(..., description="Current provider in rotation")
+
+
+# ==================== RAG Schemas ====================
+
+
+class SourceChunk(BaseModel):
+    """A source document chunk from retrieval."""
+    id: str = Field(..., description="Unique identifier of the chunk")
+    content: str = Field(..., description="Text content of the chunk")
+    score: float = Field(..., description="Relevance score (higher = more relevant)")
+    metadata: dict = Field(default_factory=dict, description="Chunk metadata (source, page, etc.)")
+
+
+class RAGChatRequest(BaseModel):
+    """Request body for RAG chat endpoints."""
+    messages: list[Message] = Field(
+        ...,
+        description="List of messages in the conversation",
+        min_length=1,
+    )
+    collection_name: Optional[str] = Field(
+        default=None,
+        description="Vector DB collection to search for context. "
+                    "If omitted, uses the server's DEFAULT_COLLECTION.",
+    )
+    system_prompt: Optional[str] = Field(
+        default=None,
+        description="Additional system prompt (appended after RAG context)",
+    )
+    provider: Optional[ProviderEnum] = Field(
+        default=None,
+        description="Force a specific LLM provider (default: auto with priority Cohere → Cerebras → Groq)",
+    )
+    model: Optional[str] = Field(
+        default=None,
+        description="Force a specific model name",
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        description="Number of vector search candidates (default: 20)",
+    )
+    rerank: bool = Field(
+        default=True,
+        description="Whether to rerank results with Cohere Reranker",
+    )
+    rerank_top_n: Optional[int] = Field(
+        default=None,
+        description="Number of results to keep after reranking (default: 5)",
+    )
+    score_threshold: Optional[float] = Field(
+        default=None,
+        description="Minimum similarity score for vector search",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "messages": [
+                    {"role": "user", "content": "What does the document say about machine learning?"}
+                ],
+                "collection_name": "my_docs",
+                "rerank": True,
+            }
+        }
+
+
+class RAGChatResponse(BaseModel):
+    """Response body for RAG chat endpoints."""
+    content: str = Field(..., description="The assistant's response")
+    provider: str = Field(..., description="The LLM provider that served the request")
+    model: str = Field(..., description="The model that generated the response")
+    sources: list[SourceChunk] = Field(
+        default_factory=list,
+        description="Source chunks used to generate the answer",
+    )
+    reranked: bool = Field(
+        default=False,
+        description="Whether results were reranked",
+    )
+    tokens: Optional[TokenUsage] = Field(
+        default=None,
+        description="Token usage statistics",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "content": "According to the documents, machine learning is...",
+                "provider": "cohere",
+                "model": "command-a-03-2025",
+                "sources": [
+                    {
+                        "id": "abc123",
+                        "content": "Machine learning is a subset of AI...",
+                        "score": 0.95,
+                        "metadata": {"source": "ml_guide.pdf", "page": 1},
+                    }
+                ],
+                "reranked": True,
+            }
+        }
+
+
+class CollectionInfoItem(BaseModel):
+    """Information about a single vector DB collection."""
+    name: str = Field(..., description="Collection name")
+    vectors_count: int = Field(..., description="Number of vectors in the collection")
+    dimension: int = Field(default=0, description="Vector dimension")
+
+
+class CollectionListResponse(BaseModel):
+    """Response body for listing collections."""
+    collections: list[CollectionInfoItem] = Field(
+        default_factory=list,
+        description="List of available collections with metadata",
+    )
+    total: int = Field(default=0, description="Total number of collections")
+
+
+class RAGSearchRequest(BaseModel):
+    """Request body for RAG search-only endpoint (no LLM generation)."""
+    query: str = Field(..., description="Search query")
+    collection_name: Optional[str] = Field(
+        default=None,
+        description="Vector DB collection to search. "
+                    "If omitted, uses the server's DEFAULT_COLLECTION.",
+    )
+    top_k: Optional[int] = Field(
+        default=None,
+        description="Number of vector search candidates (default: 20)",
+    )
+    rerank: bool = Field(
+        default=True,
+        description="Whether to rerank results",
+    )
+    rerank_top_n: Optional[int] = Field(
+        default=None,
+        description="Number of results after reranking (default: 5)",
+    )
+    score_threshold: Optional[float] = Field(
+        default=None,
+        description="Minimum similarity score",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "query": "What is machine learning?",
+                "collection_name": "my_docs",
+                "rerank": True,
+            }
+        }
+
+
+class RAGSearchResponse(BaseModel):
+    """Response body for RAG search-only endpoint."""
+    query: str = Field(..., description="The original search query")
+    results: list[SourceChunk] = Field(
+        default_factory=list,
+        description="Ranked search results",
+    )
+    reranked: bool = Field(
+        default=False,
+        description="Whether results were reranked",
+    )
+    total_candidates: int = Field(
+        default=0,
+        description="Total candidates from vector search before reranking",
+    )
+    context: str = Field(
+        default="",
+        description="Formatted context string (same as what the LLM would receive)",
+    )

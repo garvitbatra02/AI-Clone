@@ -55,6 +55,7 @@ class ProviderConfig:
 
 
 # Default provider configurations for rotation
+# Cohere is last — used only when explicitly requested or as final fallback
 DEFAULT_PROVIDERS = [
     ProviderConfig(
         provider=LLMProvider.GROQ,
@@ -63,6 +64,10 @@ DEFAULT_PROVIDERS = [
     ProviderConfig(
         provider=LLMProvider.CEREBRAS,
         default_model="llama3.1-8b",
+    ),
+    ProviderConfig(
+        provider=LLMProvider.COHERE,
+        default_model="command-a-03-2025",
     ),
 ]
 

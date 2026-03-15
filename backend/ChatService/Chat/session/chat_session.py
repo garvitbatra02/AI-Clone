@@ -265,6 +265,27 @@ class ChatSession:
         self.context[key] = value
         self.updated_at = datetime.now()
     
+    def set_rag_context(
+        self,
+        context_str: str,
+        sources: Optional[list] = None,
+    ) -> None:
+        """
+        Set RAG retrieval context for the session.
+        
+        Stores the formatted context string and source references in the
+        session context dict. This is typically called by RAGService before
+        generating an LLM response.
+        
+        Args:
+            context_str: Formatted context string from RetrievalService
+            sources: Optional list of source chunk summaries
+        """
+        self.context["rag_context"] = context_str
+        if sources is not None:
+            self.context["rag_sources"] = sources
+        self.updated_at = datetime.now()
+    
     def get_context(self, key: str, default: Any = None) -> Any:
         """
         Get a context value.

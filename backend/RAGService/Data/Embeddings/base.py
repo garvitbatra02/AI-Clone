@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from shared.key_rotation import KeyRotationMixin, AllKeysFailedError  # noqa: F401
+
 
 class EmbeddingProvider(str, Enum):
     """Supported embedding model providers."""
@@ -46,7 +48,9 @@ class EmbeddingConfig:
     Attributes:
         provider: The embedding provider to use
         model_name: Name/ID of the embedding model
-        api_key: API key for the provider
+        api_key: API key for the provider (single-key shorthand, kept for backward compat)
+        api_keys: List of API keys for automatic rotation (takes precedence over api_key)
+        max_retries: Maximum retry sweeps across all keys on failure (default: 2)
         dimension: Expected dimension of embeddings (provider-dependent)
         batch_size: Maximum batch size for embedding requests
         timeout: Request timeout in seconds
@@ -56,6 +60,8 @@ class EmbeddingConfig:
     provider: EmbeddingProvider
     model_name: str
     api_key: Optional[str] = None
+    api_keys: Optional[List[str]] = None
+    max_retries: int = 2
     dimension: Optional[int] = None
     batch_size: int = 96  # Cohere's default max batch size
     timeout: int = 60
@@ -154,16 +160,21 @@ class EmbeddingConfig:
         )
 
 
-class BaseEmbeddings(ABC):
+class BaseEmbeddings(KeyRotationMixin, ABC):
     """
     Abstract base class for embedding model implementations.
     
-    All embedding providers must implement this interface to ensure
-    consistent behavior across different backends.
+    Inherits multi-key rotation, client caching, and retry logic from
+    ``KeyRotationMixin``.  API keys are fully encapsulated — loaded
+    automatically from the environment variable named by ``ENV_VAR_NAME``.
     
-    The class provides both synchronous and asynchronous methods for
-    embedding queries and documents.
+    Subclasses must implement the ``_do_*`` methods (raw API calls)
+    and ``_initialize_client(api_key)``.  The public methods
+    (``embed_query``, ``embed_documents``, etc.) handle resilience
+    automatically.
     """
+    
+    ENV_VAR_NAME: str = ""  # Subclasses must override
     
     def __init__(self, config: EmbeddingConfig):
         """
@@ -173,11 +184,18 @@ class BaseEmbeddings(ABC):
             config: Configuration for the embedding model
         """
         self.config = config
-        self._initialize_client()
+        # Merge single api_key into api_keys list for backward compat
+        api_keys = config.api_keys or ([config.api_key] if config.api_key else None)
+        self._init_key_rotation(api_keys, config.max_retries)
     
     @abstractmethod
-    def _initialize_client(self) -> None:
-        """Initialize the embedding client. Must be implemented by subclasses."""
+    def _initialize_client(self, api_key: str) -> None:
+        """
+        Initialize the embedding client with the given API key.
+        
+        Must store the client as ``self._client`` (and optionally
+        ``self._async_client``).  The mixin caches both automatically.
+        """
         pass
     
     @property
@@ -192,14 +210,61 @@ class BaseEmbeddings(ABC):
         """Return the dimension of embeddings produced by this model."""
         pass
     
+    # ==================== Abstract raw API methods ====================
+    
     @abstractmethod
+    def _do_embed_query(
+        self,
+        text: str,
+        input_type: Optional[EmbeddingInputType] = None
+    ) -> List[float]:
+        """
+        Raw: embed a single query text.
+        Resilience is handled by the public ``embed_query`` wrapper.
+        """
+        pass
+    
+    @abstractmethod
+    async def _do_async_embed_query(
+        self,
+        text: str,
+        input_type: Optional[EmbeddingInputType] = None
+    ) -> List[float]:
+        """Async raw embed query."""
+        pass
+    
+    @abstractmethod
+    def _do_embed_documents(
+        self,
+        texts: List[str],
+        input_type: Optional[EmbeddingInputType] = None,
+        batch_size: Optional[int] = None
+    ) -> List[List[float]]:
+        """
+        Raw: embed multiple documents.
+        Resilience is handled by the public ``embed_documents`` wrapper.
+        """
+        pass
+    
+    @abstractmethod
+    async def _do_async_embed_documents(
+        self,
+        texts: List[str],
+        input_type: Optional[EmbeddingInputType] = None,
+        batch_size: Optional[int] = None
+    ) -> List[List[float]]:
+        """Async raw embed documents."""
+        pass
+    
+    # ==================== Public methods with resilience ====================
+    
     def embed_query(
         self,
         text: str,
         input_type: Optional[EmbeddingInputType] = None
     ) -> List[float]:
         """
-        Embed a single query text.
+        Embed a single query text with automatic key rotation and retry.
         
         Args:
             text: The text to embed
@@ -208,18 +273,26 @@ class BaseEmbeddings(ABC):
         Returns:
             Embedding vector as list of floats
         """
-        pass
+        return self._execute_with_rotation(
+            operation=lambda: self._do_embed_query(text, input_type),
+            is_valid=lambda r: r is not None and len(r) > 0,
+            service_label=self.provider.value,
+            model_label=self.config.model_name,
+        )
     
-    @abstractmethod
     async def async_embed_query(
         self,
         text: str,
         input_type: Optional[EmbeddingInputType] = None
     ) -> List[float]:
-        """Async version of embed_query."""
-        pass
+        """Async version of embed_query with key rotation."""
+        return await self._execute_with_rotation_async(
+            operation=lambda: self._do_async_embed_query(text, input_type),
+            is_valid=lambda r: r is not None and len(r) > 0,
+            service_label=self.provider.value,
+            model_label=self.config.model_name,
+        )
     
-    @abstractmethod
     def embed_documents(
         self,
         texts: List[str],
@@ -227,7 +300,7 @@ class BaseEmbeddings(ABC):
         batch_size: Optional[int] = None
     ) -> List[List[float]]:
         """
-        Embed multiple documents.
+        Embed multiple documents with automatic key rotation and retry.
         
         Args:
             texts: List of texts to embed
@@ -237,17 +310,30 @@ class BaseEmbeddings(ABC):
         Returns:
             List of embedding vectors
         """
-        pass
+        if not texts:
+            return []
+        return self._execute_with_rotation(
+            operation=lambda: self._do_embed_documents(texts, input_type, batch_size),
+            is_valid=lambda r: r is not None and len(r) > 0,
+            service_label=self.provider.value,
+            model_label=self.config.model_name,
+        )
     
-    @abstractmethod
     async def async_embed_documents(
         self,
         texts: List[str],
         input_type: Optional[EmbeddingInputType] = None,
         batch_size: Optional[int] = None
     ) -> List[List[float]]:
-        """Async version of embed_documents."""
-        pass
+        """Async version of embed_documents with key rotation."""
+        if not texts:
+            return []
+        return await self._execute_with_rotation_async(
+            operation=lambda: self._do_async_embed_documents(texts, input_type, batch_size),
+            is_valid=lambda r: r is not None and len(r) > 0,
+            service_label=self.provider.value,
+            model_label=self.config.model_name,
+        )
     
     def embed_text(
         self,

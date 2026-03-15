@@ -4,10 +4,11 @@ Base LLM class providing the abstract interface for all LLM providers.
 This module defines the contract that all LLM implementations must follow,
 ensuring a consistent API across different providers.
 
-Resilience features are built into BaseLLM:
+Resilience features are inherited from ``shared.key_rotation.KeyRotationMixin``:
 - Automatic API key loading from environment variables
 - Multiple API keys with automatic rotation
 - Retry on failure or empty response
+- Per-key client caching (sync + async)
 - All LLM implementations inherit these features automatically
 
 API keys are fully encapsulated inside the LLM layer. External callers
@@ -16,10 +17,11 @@ never need to handle, pass, or even know about API keys.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Iterator, Optional, Any, Union
+from typing import AsyncIterator, Iterator, Optional, Any
 from enum import Enum
 import logging
-import os
+
+from shared.key_rotation import KeyRotationMixin, AllKeysFailedError  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -29,25 +31,7 @@ class LLMProvider(str, Enum):
     GEMINI = "gemini"
     GROQ = "groq"
     CEREBRAS = "cerebras"
-
-
-class AllKeysFailedError(Exception):
-    """
-    Raised when all API keys for an LLM fail.
-    
-    Attributes:
-        provider: The provider that was being used.
-        model: The model that was requested.
-        errors: Dictionary mapping key indices to their error messages.
-    """
-    def __init__(self, provider: str, model: str, errors: dict[int, str]):
-        self.provider = provider
-        self.model = model
-        self.errors = errors
-        key_errors = "; ".join([f"key_{k}: {v}" for k, v in errors.items()])
-        super().__init__(
-            f"All API keys failed for {provider} with model {model}. Errors: {key_errors}"
-        )
+    COHERE = "cohere"
 
 
 @dataclass
@@ -126,18 +110,13 @@ class LLMResponse:
         return self.prompt_tokens + self.completion_tokens
 
 
-class BaseLLM(ABC):
+class BaseLLM(KeyRotationMixin, ABC):
     """
     Abstract base class for all LLM implementations with built-in resilience.
     
-    API keys are fully encapsulated — they are loaded automatically from
-    environment variables. External callers never need to handle keys.
-    
-    This class provides:
-    - Automatic API key loading from environment variables
-    - Automatic API key rotation on failure
-    - Retry logic for empty responses
-    - Consistent error handling
+    Key rotation, retry, and client caching are provided by
+    ``KeyRotationMixin`` from the shared package.  API keys are fully
+    encapsulated — they are loaded automatically from environment variables.
     
     Subclasses must define:
     - ENV_VAR_NAME: Class-level constant for the env var name (e.g., "GROQ_API_KEYS")
@@ -150,9 +129,10 @@ class BaseLLM(ABC):
     Usage:
         class MyLLM(BaseLLM):
             ENV_VAR_NAME = "MY_API_KEYS"
+            def _initialize_client(self, api_key):
+                self._client = SomeSDK(api_key=api_key)
             def _do_chat(self, session):
-                # Raw API call implementation
-                pass
+                return self._client.chat(...)
     """
     
     ENV_VAR_NAME: str = ""  # Subclasses must override with their env var name
@@ -168,69 +148,20 @@ class BaseLLM(ABC):
             config: LLMConfig instance with model settings
         """
         self.config = config
-        self._clients: dict[int, Any] = {}  # key_index -> client
-        self._current_key_index = 0
-        
-        # Self-provision API keys from environment if not explicitly provided
-        if not self.config.api_keys:
-            self.config.api_keys = self._load_api_keys_from_env()
-        
-        if not self.config.api_keys:
-            raise ValueError(
-                f"No API keys available for {self.__class__.__name__}. "
-                f"Set the {self.ENV_VAR_NAME} environment variable with "
-                f"comma-separated API keys."
-            )
-        
-        # Initialize client with first key
-        self._initialize_client(self.config.api_keys[0])
-    
-    def _load_api_keys_from_env(self) -> list[str]:
-        """
-        Load API keys from the environment variable.
-        
-        Reads ENV_VAR_NAME, splits by comma, strips whitespace.
-        
-        Returns:
-            List of API key strings (may be empty)
-        """
-        if not self.ENV_VAR_NAME:
-            return []
-        keys_str = os.getenv(self.ENV_VAR_NAME, "")
-        return [key.strip() for key in keys_str.split(",") if key.strip()]
+        self._init_key_rotation(config.api_keys, config.max_retries)
     
     @abstractmethod
     def _initialize_client(self, api_key: str) -> None:
         """
         Initialize the provider-specific client with given API key.
         
+        Must store the client as ``self._client`` (and optionally
+        ``self._async_client``).  The mixin caches both automatically.
+        
         Args:
             api_key: The API key to use for this client
         """
         pass
-    
-    def _get_client_for_key(self, key_index: int) -> Any:
-        """
-        Get or create a client for a specific API key.
-        
-        Args:
-            key_index: Index of the API key to use
-            
-        Returns:
-            Provider client instance
-        """
-        if key_index not in self._clients:
-            api_key = self.config.api_keys[key_index]
-            # Store current client
-            old_client = getattr(self, '_client', None)
-            # Initialize new client
-            self._initialize_client(api_key)
-            # Cache it
-            self._clients[key_index] = self._client
-            # Restore if needed
-            if old_client and key_index != 0:
-                pass  # Keep the new client as current
-        return self._clients[key_index]
     
     @property
     @abstractmethod
@@ -295,58 +226,12 @@ class BaseLLM(ABC):
         Raises:
             AllKeysFailedError: If all API keys fail after all retries
         """
-        for retry_attempt in range(self.config.max_retries + 1):
-            errors: dict[int, str] = {}
-            
-            if retry_attempt > 0:
-                logger.info(
-                    f"Retrying all keys for {self.provider.value} "
-                    f"(attempt {retry_attempt + 1}/{self.config.max_retries + 1})..."
-                )
-            
-            for key_index, api_key in enumerate(self.config.api_keys):
-                try:
-                    # Get client for this key
-                    self._client = self._get_client_for_key(key_index)
-                    
-                    response = self._do_chat(session)
-                    
-                    # Validate response is not empty
-                    if self._is_response_empty(response):
-                        logger.warning(
-                            f"{self.provider.value} key {key_index} returned empty response "
-                            f"(attempt {retry_attempt + 1}). Trying next key..."
-                        )
-                        errors[key_index] = "Empty response"
-                        continue
-                    
-                    # Success
-                    logger.info(
-                        f"Successfully served request using {self.provider.value} "
-                        f"key {key_index} (content length: {len(response.content)})"
-                    )
-                    return response
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    errors[key_index] = error_msg
-                    logger.warning(
-                        f"{self.provider.value} key {key_index} failed: {error_msg}. "
-                        f"Trying next key..."
-                    )
-            
-            # All keys failed for this attempt
-            if retry_attempt < self.config.max_retries:
-                logger.warning(
-                    f"All keys for {self.provider.value} failed. Retrying..."
-                )
-        
-        # All retries exhausted
-        logger.error(
-            f"All {len(self.config.api_keys)} keys failed for {self.provider.value} "
-            f"after {self.config.max_retries + 1} attempts"
+        return self._execute_with_rotation(
+            operation=lambda: self._do_chat(session),
+            is_valid=lambda r: not self._is_response_empty(r),
+            service_label=self.provider.value,
+            model_label=self.config.model,
         )
-        raise AllKeysFailedError(self.provider.value, self.config.model, errors)
     
     async def chat_async(self, session: "ChatSession") -> "LLMResponse":
         """
@@ -363,58 +248,12 @@ class BaseLLM(ABC):
         Raises:
             AllKeysFailedError: If all API keys fail after all retries
         """
-        for retry_attempt in range(self.config.max_retries + 1):
-            errors: dict[int, str] = {}
-            
-            if retry_attempt > 0:
-                logger.info(
-                    f"Retrying all async keys for {self.provider.value} "
-                    f"(attempt {retry_attempt + 1}/{self.config.max_retries + 1})..."
-                )
-            
-            for key_index, api_key in enumerate(self.config.api_keys):
-                try:
-                    # Get client for this key
-                    self._client = self._get_client_for_key(key_index)
-                    
-                    response = await self._do_chat_async(session)
-                    
-                    # Validate response is not empty
-                    if self._is_response_empty(response):
-                        logger.warning(
-                            f"{self.provider.value} key {key_index} returned empty response "
-                            f"(attempt {retry_attempt + 1}). Trying next key..."
-                        )
-                        errors[key_index] = "Empty response"
-                        continue
-                    
-                    # Success
-                    logger.info(
-                        f"Successfully served async request using {self.provider.value} "
-                        f"key {key_index} (content length: {len(response.content)})"
-                    )
-                    return response
-                    
-                except Exception as e:
-                    error_msg = str(e)
-                    errors[key_index] = error_msg
-                    logger.warning(
-                        f"{self.provider.value} key {key_index} failed: {error_msg}. "
-                        f"Trying next key..."
-                    )
-            
-            # All keys failed for this attempt
-            if retry_attempt < self.config.max_retries:
-                logger.warning(
-                    f"All async keys for {self.provider.value} failed. Retrying..."
-                )
-        
-        # All retries exhausted
-        logger.error(
-            f"All {len(self.config.api_keys)} async keys failed for {self.provider.value} "
-            f"after {self.config.max_retries + 1} attempts"
+        return await self._execute_with_rotation_async(
+            operation=lambda: self._do_chat_async(session),
+            is_valid=lambda r: not self._is_response_empty(r),
+            service_label=self.provider.value,
+            model_label=self.config.model,
         )
-        raise AllKeysFailedError(self.provider.value, self.config.model, errors)
     
     def chat_stream(self, session: "ChatSession") -> Iterator[str]:
         """
@@ -429,37 +268,11 @@ class BaseLLM(ABC):
         Raises:
             AllKeysFailedError: If all API keys fail
         """
-        errors: dict[int, str] = {}
-        
-        for key_index, api_key in enumerate(self.config.api_keys):
-            try:
-                # Get client for this key
-                self._client = self._get_client_for_key(key_index)
-                
-                # Try to get first chunk to verify connection
-                stream = self._do_chat_stream(session)
-                first_chunk = next(stream)
-                
-                logger.info(
-                    f"Successfully streaming using {self.provider.value} key {key_index}"
-                )
-                yield first_chunk
-                yield from stream
-                return
-                
-            except Exception as e:
-                error_msg = str(e)
-                errors[key_index] = error_msg
-                logger.warning(
-                    f"{self.provider.value} key {key_index} failed: {error_msg}. "
-                    f"Trying next key..."
-                )
-        
-        # All keys failed
-        logger.error(
-            f"All {len(self.config.api_keys)} keys failed for streaming {self.provider.value}"
+        yield from self._stream_with_rotation(
+            operation=lambda: self._do_chat_stream(session),
+            service_label=self.provider.value,
+            model_label=self.config.model,
         )
-        raise AllKeysFailedError(self.provider.value, self.config.model, errors)
     
     async def chat_stream_async(self, session: "ChatSession") -> AsyncIterator[str]:
         """
@@ -474,38 +287,12 @@ class BaseLLM(ABC):
         Raises:
             AllKeysFailedError: If all API keys fail
         """
-        errors: dict[int, str] = {}
-        
-        for key_index, api_key in enumerate(self.config.api_keys):
-            try:
-                # Get client for this key
-                self._client = self._get_client_for_key(key_index)
-                
-                # Try to get first chunk to verify connection
-                stream = self._do_chat_stream_async(session)
-                first_chunk = await stream.__anext__()
-                
-                logger.info(
-                    f"Successfully streaming async using {self.provider.value} key {key_index}"
-                )
-                yield first_chunk
-                async for chunk in stream:
-                    yield chunk
-                return
-                
-            except Exception as e:
-                error_msg = str(e)
-                errors[key_index] = error_msg
-                logger.warning(
-                    f"{self.provider.value} key {key_index} failed: {error_msg}. "
-                    f"Trying next key..."
-                )
-        
-        # All keys failed
-        logger.error(
-            f"All {len(self.config.api_keys)} async keys failed for streaming {self.provider.value}"
-        )
-        raise AllKeysFailedError(self.provider.value, self.config.model, errors)
+        async for chunk in self._stream_with_rotation_async(
+            operation=lambda: self._do_chat_stream_async(session),
+            service_label=self.provider.value,
+            model_label=self.config.model,
+        ):
+            yield chunk
     
     def _format_messages(self, session: "ChatSession") -> list[dict[str, str]]:
         """
@@ -545,7 +332,7 @@ class BaseLLM(ABC):
         Raises:
             ValueError: If configuration is invalid
         """
-        if not self.config.api_keys:
+        if not self._api_keys:
             raise ValueError("API keys are required")
         if not self.config.model:
             raise ValueError("Model name is required")

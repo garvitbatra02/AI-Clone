@@ -11,6 +11,7 @@ from typing import Optional, Type, Union
 from .base import BaseLLM, LLMConfig, LLMProvider
 from .proprietary_llms.groq_llm import GroqLLM
 from .proprietary_llms.cerebras_llm import CerebrasLLM
+from .proprietary_llms.cohere_llm import CohereLLM
 from .model_registry import get_provider_for_model
 
 
@@ -38,6 +39,7 @@ class LLMFactory:
     _provider_map: dict[LLMProvider, Type[BaseLLM]] = {
         LLMProvider.GROQ: GroqLLM,
         LLMProvider.CEREBRAS: CerebrasLLM,
+        LLMProvider.COHERE: CohereLLM,
     }
     
     @classmethod

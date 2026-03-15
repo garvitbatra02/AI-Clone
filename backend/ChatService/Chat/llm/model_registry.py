@@ -77,6 +77,22 @@ MODEL_REGISTRY: Dict[str, LLMProvider] = {
     # Production Models
     "llama3.1-8b": LLMProvider.CEREBRAS,
     "gpt-oss-120b": LLMProvider.CEREBRAS,
+    
+    # ===== COHERE MODELS =====
+    # Command A Series (Latest Generation)
+    "command-a-03-2025": LLMProvider.COHERE,
+    
+    # Command R Series
+    "command-r-08-2024": LLMProvider.COHERE,
+    "command-r-plus-08-2024": LLMProvider.COHERE,
+    
+    # Command R7B (Lightweight)
+    "command-r7b-12-2024": LLMProvider.COHERE,
+    
+    # Legacy Command Models
+    "command": LLMProvider.COHERE,
+    "command-light": LLMProvider.COHERE,
+    "command-nightly": LLMProvider.COHERE,
 }
 
 

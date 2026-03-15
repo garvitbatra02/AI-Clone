@@ -47,15 +47,16 @@ class VectorDBServiceConfig:
     """
     vectordb_provider: VectorDBProvider = VectorDBProvider.QDRANT
     embedding_provider: EmbeddingProvider = EmbeddingProvider.COHERE
-    collection_name: str = "default"
+    collection_name: str = "assets"
     in_memory: bool = False
     embedding_model: Optional[str] = None
     distance_metric: DistanceMetric = DistanceMetric.COSINE
     auto_create_collection: bool = True
     
     @classmethod
-    def from_env(cls, collection_name: str = "default") -> "VectorDBServiceConfig":
+    def from_env(cls, collection_name: Optional[str] = None) -> "VectorDBServiceConfig":
         """Create configuration from environment variables."""
+        resolved_collection = collection_name or os.environ.get("DEFAULT_COLLECTION", "assets")
         return cls(
             vectordb_provider=VectorDBProvider(
                 os.environ.get("VECTORDB_PROVIDER", "qdrant")
@@ -63,7 +64,7 @@ class VectorDBServiceConfig:
             embedding_provider=EmbeddingProvider(
                 os.environ.get("EMBEDDING_PROVIDER", "cohere")
             ),
-            collection_name=collection_name,
+            collection_name=resolved_collection,
             in_memory=os.environ.get("VECTORDB_IN_MEMORY", "false").lower() == "true",
             embedding_model=os.environ.get("EMBEDDING_MODEL"),
         )

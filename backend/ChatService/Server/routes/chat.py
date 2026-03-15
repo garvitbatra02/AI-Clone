@@ -92,7 +92,18 @@ async def chat(request: ChatRequest) -> ChatResponse:
     # Get provider enum if specified
     provider = None
     if request.provider:
-        provider = LLMProvider(request.provider.value.upper())
+        provider = LLMProvider(request.provider.value)
+        # Validate the provider is actually configured in the chat service
+        service = get_chat_service()
+        configured = {p.provider for p in service._providers}
+        if provider not in configured:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Provider '{request.provider.value}' is not configured for the chat service.",
+                    "available_providers": [p.value for p in configured],
+                },
+            )
     
     try:
         # Use async version for FastAPI
@@ -166,7 +177,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
     
     provider = None
     if request.provider:
-        provider = LLMProvider(request.provider.value.upper())
+        provider = LLMProvider(request.provider.value)
     
     async def generate() -> AsyncGenerator[str, None]:
         try:
@@ -238,7 +249,7 @@ async def websocket_chat(websocket: WebSocket):
                 
                 provider = None
                 if request.provider:
-                    provider = LLMProvider(request.provider.value.upper())
+                    provider = LLMProvider(request.provider.value)
                 
                 # Stream response
                 async for chunk in chat_inference_stream_async(

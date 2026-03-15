@@ -33,12 +33,27 @@ from RAGService.Data.services import (
     AssetUploadConfig,
     get_vectordb_service,
     get_asset_upload_service,
+    RetrievalService,
+    RetrievalConfig,
+    RetrievalResult,
+    get_retrieval_service,
+    RAGService,
+    RAGConfig,
+    RAGResponse,
+    get_rag_service,
 )
 
 from RAGService.Data.DocumentProcessors import (
     SmartChunker,
     SmartChunkerConfig,
     ChunkMetadata,
+)
+
+from RAGService.Data.Reranker import (
+    BaseReranker,
+    RerankerConfig,
+    RerankerProvider,
+    CohereReranker,
 )
 
 __all__ = [
@@ -63,8 +78,21 @@ __all__ = [
     "AssetUploadConfig",
     "get_vectordb_service",
     "get_asset_upload_service",
+    "RetrievalService",
+    "RetrievalConfig",
+    "RetrievalResult",
+    "get_retrieval_service",
+    "RAGService",
+    "RAGConfig",
+    "RAGResponse",
+    "get_rag_service",
     # Smart Chunking
     "SmartChunker",
     "SmartChunkerConfig",
     "ChunkMetadata",
+    # Reranker
+    "BaseReranker",
+    "RerankerConfig",
+    "RerankerProvider",
+    "CohereReranker",
 ]

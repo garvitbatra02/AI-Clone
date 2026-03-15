@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 
 from ..Chat import get_chat_service
 from .routes.chat import router as chat_router
+from .routes.rag import router as rag_router
 from .models.schemas import HealthResponse, ServiceInfoResponse
 
 # Load environment variables
@@ -42,6 +43,38 @@ async def lifespan(app: FastAPI):
     logger.info(f"Chat service initialized with {service.get_provider_count()} providers")
     logger.info(f"Active providers: {[p.value for p in service.get_active_providers()]}")
     
+    # Initialize the RAG service (isolated singleton with its own provider priority)
+    try:
+        from RAGService.Data.services.rag_service import get_rag_service
+        rag_service = get_rag_service()
+        logger.info(
+            f"RAG service initialized with {rag_service.get_provider_count()} providers: "
+            f"{rag_service.get_active_providers()}"
+        )
+        
+        # Eagerly validate VectorDB connectivity
+        try:
+            vectordb_svc = rag_service.retrieval_service.vectordb_service
+            qdrant_url = os.environ.get("QDRANT_URL")
+            mode = f"cloud ({qdrant_url})" if qdrant_url else "in-memory (ephemeral)"
+            logger.info(f"VectorDB connection mode: {mode}")
+            
+            collections = vectordb_svc.list_collections()
+            if collections:
+                logger.info(f"VectorDB collections available: {collections}")
+                for coll_name in collections:
+                    try:
+                        count = vectordb_svc.count(collection_name=coll_name)
+                        logger.info(f"  → '{coll_name}': {count} vectors")
+                    except Exception:
+                        logger.info(f"  → '{coll_name}': (count unavailable)")
+            else:
+                logger.info("VectorDB: no collections found yet")
+        except Exception as e:
+            logger.warning(f"VectorDB connectivity check failed: {e}")
+    except Exception as e:
+        logger.warning(f"RAG service initialization skipped: {e}")
+    
     yield
     
     # Shutdown
@@ -59,20 +92,26 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="ChatClone API",
         description="""
-        ## Chat API with LLM Provider Rotation
+        ## Chat API with LLM Provider Rotation & RAG
         
-        This API provides chat inference endpoints that automatically rotate
-        between multiple LLM providers (Groq, Cerebras) to manage rate limits.
+        This API provides chat inference and Retrieval Augmented Generation (RAG)
+        endpoints with automatic provider rotation and fallback.
         
         ### Features:
         - **Automatic Provider Rotation**: Distributes requests across providers
         - **Fallback Support**: Tries next provider on failure
+        - **RAG Pipeline**: Vector search → Cohere Rerank → LLM generation
         - **Streaming**: Real-time response streaming via SSE or WebSocket
         - **Async Support**: High-performance async endpoints
         
-        ### Providers:
+        ### Chat Providers:
         - **Groq**: Fast inference with Llama models
         - **Cerebras**: Ultra-fast inference with Llama models
+        
+        ### RAG Providers (priority order):
+        - **Cohere**: Command models for RAG generation
+        - **Cerebras**: Fallback with Llama models
+        - **Groq**: Fallback with Llama models
         """,
         version="1.0.0",
         lifespan=lifespan,
@@ -93,6 +132,7 @@ def create_app() -> FastAPI:
     
     # Include routers
     app.include_router(chat_router, prefix="/api")
+    app.include_router(rag_router, prefix="/api")
     
     # Health check endpoint
     @app.get(

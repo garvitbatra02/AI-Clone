@@ -9,6 +9,7 @@ from RAGService.Data.Embeddings.base import (
     EmbeddingConfig,
     EmbeddingInputType,
     EmbeddingProvider,
+    AllKeysFailedError,
 )
 from RAGService.Data.Embeddings.factory import EmbeddingsFactory
 from RAGService.Data.Embeddings.registry import (
@@ -24,6 +25,7 @@ __all__ = [
     "EmbeddingConfig",
     "EmbeddingProvider",
     "EmbeddingInputType",
+    "AllKeysFailedError",
     # Factory
     "EmbeddingsFactory",
     # Registry functions

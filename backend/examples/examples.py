@@ -186,8 +186,9 @@ def example_direct_llm_instantiation():
     session.add_system_prompt("You are a creative writing assistant.")
     session.add_user_message("Write a haiku about programming.")
     
-    # response = llm.chat(session)
-    # print(response.content)
+    response = llm.chat(session)
+    print(f"Response: {response.content}")
+    print(f"Tokens: {response.total_tokens}")
 
 
 def example_session_persistence_workflow():
@@ -214,17 +215,15 @@ def example_session_persistence_workflow():
 
 
 if __name__ == "__main__":
-    # Run examples (uncomment as needed)
+    import asyncio
+    
     print("\n" + "="*60)
     print("ChatServer LLM Examples - Groq & Cerebras AI")
     print("="*60)
     
-    # example_basic_usage()
-    # example_different_providers()
-    # example_streaming()
-    # example_session_management()
+    example_basic_usage()
+    example_different_providers()
+    example_streaming()
+    example_session_management()
     example_direct_llm_instantiation()
-    
-    # For async examples:
-    # import asyncio
-    # asyncio.run(example_async_usage())
+    asyncio.run(example_async_usage())

@@ -366,15 +366,15 @@ def main():
     print("="*60)
     
     # Run sync examples
-    # example_basic_rotation()
-    # example_single_session_multi_turn()  # ← NEW: Single session, multiple turns
-    # example_with_fallback()
-    # example_without_fallback()
-    # example_streaming_with_fallback()
-    # example_service_management()
-    # example_specific_provider()
-    # example_error_handling()
-    # example_conversation_with_rotation()
+    example_basic_rotation()
+    example_single_session_multi_turn()
+    example_with_fallback()
+    example_without_fallback()
+    example_streaming_with_fallback()
+    example_service_management()
+    example_specific_provider()
+    example_error_handling()
+    example_conversation_with_rotation()
     
     # Run async examples
     print("\n" + "="*60)

@@ -8,8 +8,11 @@ supporting both synchronous and asynchronous operations.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from typing import Any, Dict, List, Optional, Sequence, Union
+
+logger = logging.getLogger(__name__)
 
 from qdrant_client import AsyncQdrantClient, QdrantClient
 from qdrant_client.http import models as qdrant_models
@@ -113,6 +116,12 @@ class QdrantVectorDB(BaseVectorDB):
             )
         else:
             # Default to in-memory if nothing specified
+            logger.warning(
+                "⚠️  No QDRANT_URL or path configured — falling back to "
+                "ephemeral in-memory mode. Data will NOT persist across restarts. "
+                "Set QDRANT_URL and QDRANT_API_KEY environment variables for "
+                "production use with Qdrant Cloud."
+            )
             self._client = QdrantClient(location=":memory:")
             self._async_client = AsyncQdrantClient(location=":memory:")
     

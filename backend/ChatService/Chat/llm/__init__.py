@@ -3,6 +3,7 @@
 from .base import BaseLLM, LLMConfig, LLMResponse, LLMProvider
 from .proprietary_llms.groq_llm import GroqLLM
 from .proprietary_llms.cerebras_llm import CerebrasLLM
+from .proprietary_llms.cohere_llm import CohereLLM
 from .factory import LLMFactory
 from .model_registry import (
     MODEL_REGISTRY,
@@ -20,6 +21,7 @@ __all__ = [
     "LLMProvider",
     "GroqLLM",
     "CerebrasLLM",
+    "CohereLLM",
     "LLMFactory",
     "MODEL_REGISTRY",
     "get_provider_for_model",

@@ -6,12 +6,8 @@ Provides embedding functionality using Cohere's embedding models.
 
 from __future__ import annotations
 
-import asyncio
 import os
 from typing import List, Optional
-
-import cohere
-from cohere import AsyncClientV2, ClientV2
 
 from RAGService.Data.Embeddings.base import (
     BaseEmbeddings,
@@ -53,11 +49,14 @@ class CohereEmbeddings(BaseEmbeddings):
         ])
     """
     
-    ENV_VAR_NAME: str = "COHERE_API_KEY"
+    ENV_VAR_NAME: str = "COHERE_API_KEYS"
     
     _client: ClientV2
     _async_client: AsyncClientV2
     _dimension: int
+    
+    # Backward compat: try singular env var if plural is not set
+    _FALLBACK_ENV_VAR = "COHERE_API_KEY"
     
     # Cohere input type mapping
     _INPUT_TYPE_MAP = {
@@ -79,14 +78,23 @@ class CohereEmbeddings(BaseEmbeddings):
         "embed-multilingual-v2.0": 768,
     }
     
-    def _initialize_client(self) -> None:
-        """Initialize Cohere clients (sync and async)."""
-        api_key = self.config.api_key or os.environ.get(self.ENV_VAR_NAME)
-        
-        if not api_key:
-            raise ValueError(
-                f"Cohere API key is required. Provide it via config or "
-                f"set the {self.ENV_VAR_NAME} environment variable."
+    def _load_api_keys_from_env(self) -> list[str]:
+        """Try COHERE_API_KEYS first, fall back to COHERE_API_KEY."""
+        keys = super()._load_api_keys_from_env()
+        if not keys:
+            single = os.getenv(self._FALLBACK_ENV_VAR, "").strip()
+            if single:
+                keys = [single]
+        return keys
+    
+    def _initialize_client(self, api_key: str) -> None:
+        """Initialize Cohere clients (sync and async) with given API key."""
+        try:
+            from cohere import ClientV2, AsyncClientV2
+        except ImportError:
+            raise ImportError(
+                "Cohere package is required for embeddings. "
+                "Install it with: pip install cohere>=5.0.0"
             )
         
         self._client = ClientV2(
@@ -122,13 +130,13 @@ class CohereEmbeddings(BaseEmbeddings):
             return default
         return self._INPUT_TYPE_MAP.get(input_type, default)
     
-    def embed_query(
+    def _do_embed_query(
         self,
         text: str,
         input_type: Optional[EmbeddingInputType] = None
     ) -> List[float]:
         """
-        Embed a single query text.
+        Raw: embed a single query text.
         
         Args:
             text: The text to embed
@@ -153,12 +161,12 @@ class CohereEmbeddings(BaseEmbeddings):
         # V2 API returns embeddings in response.embeddings.float_
         return response.embeddings.float_[0]
     
-    async def async_embed_query(
+    async def _do_async_embed_query(
         self,
         text: str,
         input_type: Optional[EmbeddingInputType] = None
     ) -> List[float]:
-        """Async version of embed_query."""
+        """Async raw: embed a single query text."""
         cohere_input_type = self._get_input_type(
             input_type, default="search_query"
         )
@@ -173,14 +181,14 @@ class CohereEmbeddings(BaseEmbeddings):
         
         return response.embeddings.float_[0]
     
-    def embed_documents(
+    def _do_embed_documents(
         self,
         texts: List[str],
         input_type: Optional[EmbeddingInputType] = None,
         batch_size: Optional[int] = None
     ) -> List[List[float]]:
         """
-        Embed multiple documents.
+        Raw: embed multiple documents.
         
         Args:
             texts: List of texts to embed
@@ -219,13 +227,13 @@ class CohereEmbeddings(BaseEmbeddings):
         
         return all_embeddings
     
-    async def async_embed_documents(
+    async def _do_async_embed_documents(
         self,
         texts: List[str],
         input_type: Optional[EmbeddingInputType] = None,
         batch_size: Optional[int] = None
     ) -> List[List[float]]:
-        """Async version of embed_documents."""
+        """Async raw: embed multiple documents."""
         if not texts:
             return []
         
