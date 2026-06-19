@@ -93,6 +93,63 @@ MODEL_REGISTRY: Dict[str, LLMProvider] = {
     "command": LLMProvider.COHERE,
     "command-light": LLMProvider.COHERE,
     "command-nightly": LLMProvider.COHERE,
+    
+    # ===== NVIDIA NIM MODELS =====
+    # Nemotron 3 Series (Flagship - Hybrid Mamba-Transformer MoE)
+    "nvidia/nemotron-3-ultra-550b-a55b": LLMProvider.NVIDIA,
+    "nvidia/nemotron-3-super-120b-a12b": LLMProvider.NVIDIA,
+    "nvidia/nemotron-3-nano-30b-a3b": LLMProvider.NVIDIA,
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning": LLMProvider.NVIDIA,
+    
+    # Nemotron Legacy
+    "nvidia/nvidia-nemotron-nano-9b-v2": LLMProvider.NVIDIA,
+    "nvidia/nemotron-mini-4b-instruct": LLMProvider.NVIDIA,
+    
+    # Llama-Nemotron Series (NVIDIA fine-tuned)
+    "nvidia/llama-3.3-nemotron-super-49b-v1.5": LLMProvider.NVIDIA,
+    "nvidia/llama-3.3-nemotron-super-49b-v1": LLMProvider.NVIDIA,
+    "nvidia/llama-3.1-nemotron-nano-8b-v1": LLMProvider.NVIDIA,
+    
+    # Meta Llama on NVIDIA NIM
+    "meta/llama-3.3-70b-instruct": LLMProvider.NVIDIA,
+    "meta/llama-3.2-3b-instruct": LLMProvider.NVIDIA,
+    "meta/llama-3.2-1b-instruct": LLMProvider.NVIDIA,
+    "meta/llama-4-maverick-17b-128e-instruct": LLMProvider.NVIDIA,
+    
+    # Mistral on NVIDIA NIM
+    "mistralai/mistral-medium-3.5-128b": LLMProvider.NVIDIA,
+    "mistralai/mistral-small-4-119b-2603": LLMProvider.NVIDIA,
+    "mistralai/mistral-large-3-675b-instruct-2512": LLMProvider.NVIDIA,
+    "mistralai/ministral-14b-instruct-2512": LLMProvider.NVIDIA,
+    "mistralai/mistral-nemotron": LLMProvider.NVIDIA,
+    
+    # DeepSeek on NVIDIA NIM
+    "deepseek-ai/deepseek-v4-flash": LLMProvider.NVIDIA,
+    "deepseek-ai/deepseek-v4-pro": LLMProvider.NVIDIA,
+    
+    # Qwen on NVIDIA NIM
+    "qwen/qwen3.5-122b-a10b": LLMProvider.NVIDIA,
+    "qwen/qwen3.5-397b-a17b": LLMProvider.NVIDIA,
+    "qwen/qwen3-next-80b-a3b-instruct": LLMProvider.NVIDIA,
+    
+    # Google on NVIDIA NIM
+    "google/gemma-4-31b-it": LLMProvider.NVIDIA,
+    "google/gemma-3n-e4b-it": LLMProvider.NVIDIA,
+    "google/gemma-3n-e2b-it": LLMProvider.NVIDIA,
+    "google/diffusiongemma-26b-a4b-it": LLMProvider.NVIDIA,
+    
+    # Other providers on NVIDIA NIM
+    "moonshotai/kimi-k2.6": LLMProvider.NVIDIA,
+    "z-ai/glm-5.1": LLMProvider.NVIDIA,
+    "stepfun-ai/step-3.7-flash": LLMProvider.NVIDIA,
+    "stepfun-ai/step-3.5-flash": LLMProvider.NVIDIA,
+    "minimaxai/minimax-m3": LLMProvider.NVIDIA,
+    "minimaxai/minimax-m2.7": LLMProvider.NVIDIA,
+    "bytedance/seed-oss-36b-instruct": LLMProvider.NVIDIA,
+    "microsoft/phi-4-mini-instruct": LLMProvider.NVIDIA,
+    "openai/gpt-oss-20b": LLMProvider.NVIDIA,
+    "openai/gpt-oss-120b": LLMProvider.NVIDIA,
+    "abacusai/dracarys-llama-3.1-70b-instruct": LLMProvider.NVIDIA,
 }
 
 

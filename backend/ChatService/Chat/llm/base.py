@@ -32,6 +32,7 @@ class LLMProvider(str, Enum):
     GROQ = "groq"
     CEREBRAS = "cerebras"
     COHERE = "cohere"
+    NVIDIA = "nvidia"
 
 
 @dataclass
