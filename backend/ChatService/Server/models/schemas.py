@@ -11,6 +11,7 @@ class ProviderEnum(str, Enum):
     CEREBRAS = "cerebras"
     COHERE = "cohere"
     NVIDIA = "nvidia"
+    MISTRAL = "mistral"
 
 
 class MessageRole(str, Enum):

@@ -150,6 +150,56 @@ MODEL_REGISTRY: Dict[str, LLMProvider] = {
     "openai/gpt-oss-20b": LLMProvider.NVIDIA,
     "openai/gpt-oss-120b": LLMProvider.NVIDIA,
     "abacusai/dracarys-llama-3.1-70b-instruct": LLMProvider.NVIDIA,
+    
+    # ===== MISTRAL AI MODELS =====
+    # Mistral Large (Flagship)
+    "mistral-large-latest": LLMProvider.MISTRAL,
+    "mistral-large-2512": LLMProvider.MISTRAL,
+    
+    # Mistral Medium (Balanced)
+    "mistral-medium-latest": LLMProvider.MISTRAL,
+    "mistral-medium-2604": LLMProvider.MISTRAL,
+    "mistral-medium-2508": LLMProvider.MISTRAL,
+    "mistral-medium-2505": LLMProvider.MISTRAL,
+    "mistral-medium-3.5": LLMProvider.MISTRAL,
+    "mistral-medium-3": LLMProvider.MISTRAL,
+    "mistral-medium": LLMProvider.MISTRAL,
+    
+    # Mistral Small (Efficient)
+    "mistral-small-latest": LLMProvider.MISTRAL,
+    "mistral-small-2603": LLMProvider.MISTRAL,
+    "mistral-small-2506": LLMProvider.MISTRAL,
+    
+    # Ministral (Edge/Lightweight)
+    "ministral-8b-latest": LLMProvider.MISTRAL,
+    "ministral-8b-2512": LLMProvider.MISTRAL,
+    "ministral-3b-latest": LLMProvider.MISTRAL,
+    "ministral-3b-2512": LLMProvider.MISTRAL,
+    "ministral-14b-latest": LLMProvider.MISTRAL,
+    "ministral-14b-2512": LLMProvider.MISTRAL,
+    
+    # Codestral (Code Generation)
+    "codestral-latest": LLMProvider.MISTRAL,
+    "codestral-2508": LLMProvider.MISTRAL,
+    
+    # Magistral (Reasoning)
+    "magistral-medium-latest": LLMProvider.MISTRAL,
+    "magistral-medium-2509": LLMProvider.MISTRAL,
+    "magistral-small-latest": LLMProvider.MISTRAL,
+    "magistral-small-2509": LLMProvider.MISTRAL,
+    
+    # Devstral (Development)
+    "devstral-latest": LLMProvider.MISTRAL,
+    "devstral-2512": LLMProvider.MISTRAL,
+    "devstral-medium-latest": LLMProvider.MISTRAL,
+    
+    # Open-weight Models
+    "open-mistral-nemo": LLMProvider.MISTRAL,
+    "open-mistral-nemo-2407": LLMProvider.MISTRAL,
+    
+    # Tiny (Legacy)
+    "mistral-tiny-latest": LLMProvider.MISTRAL,
+    "mistral-tiny-2407": LLMProvider.MISTRAL,
 }
 
 

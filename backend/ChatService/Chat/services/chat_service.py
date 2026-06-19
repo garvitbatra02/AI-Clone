@@ -70,6 +70,10 @@ DEFAULT_PROVIDERS = [
         default_model="nvidia/nemotron-3-nano-30b-a3b",
     ),
     ProviderConfig(
+        provider=LLMProvider.MISTRAL,
+        default_model="mistral-small-latest",
+    ),
+    ProviderConfig(
         provider=LLMProvider.COHERE,
         default_model="command-a-03-2025",
     ),

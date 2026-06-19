@@ -13,6 +13,7 @@ from .proprietary_llms.groq_llm import GroqLLM
 from .proprietary_llms.cerebras_llm import CerebrasLLM
 from .proprietary_llms.cohere_llm import CohereLLM
 from .proprietary_llms.nvidia_llm import NvidiaLLM
+from .proprietary_llms.mistral_llm import MistralLLM
 from .model_registry import get_provider_for_model
 
 
@@ -42,6 +43,7 @@ class LLMFactory:
         LLMProvider.CEREBRAS: CerebrasLLM,
         LLMProvider.COHERE: CohereLLM,
         LLMProvider.NVIDIA: NvidiaLLM,
+        LLMProvider.MISTRAL: MistralLLM,
     }
     
     @classmethod
