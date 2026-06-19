@@ -66,6 +66,10 @@ DEFAULT_PROVIDERS = [
         default_model="llama3.1-8b",
     ),
     ProviderConfig(
+        provider=LLMProvider.NVIDIA,
+        default_model="nvidia/nemotron-3-nano-30b-a3b",
+    ),
+    ProviderConfig(
         provider=LLMProvider.COHERE,
         default_model="command-a-03-2025",
     ),

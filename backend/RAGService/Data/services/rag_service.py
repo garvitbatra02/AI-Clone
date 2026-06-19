@@ -46,7 +46,7 @@ logger = logging.getLogger(__name__)
 # ==================== Configuration ====================
 
 
-# Default RAG provider priority: Cohere → Cerebras → Groq
+# Default RAG provider priority: Cohere → Cerebras → NVIDIA → Groq
 DEFAULT_RAG_PROVIDERS = [
     ProviderConfig(
         provider=LLMProvider.COHERE,
@@ -55,6 +55,10 @@ DEFAULT_RAG_PROVIDERS = [
     ProviderConfig(
         provider=LLMProvider.CEREBRAS,
         default_model="llama3.1-8b",
+    ),
+    ProviderConfig(
+        provider=LLMProvider.NVIDIA,
+        default_model="nvidia/nemotron-3-nano-30b-a3b",
     ),
     ProviderConfig(
         provider=LLMProvider.GROQ,

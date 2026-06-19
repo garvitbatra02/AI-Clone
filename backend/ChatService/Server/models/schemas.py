@@ -10,6 +10,7 @@ class ProviderEnum(str, Enum):
     GROQ = "groq"
     CEREBRAS = "cerebras"
     COHERE = "cohere"
+    NVIDIA = "nvidia"
 
 
 class MessageRole(str, Enum):
