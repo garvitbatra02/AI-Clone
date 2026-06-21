@@ -225,7 +225,7 @@ async def rag_chat_stream(request: RAGChatRequest) -> StreamingResponse:
     async def generate() -> AsyncGenerator[str, None]:
         try:
             collections = _resolve_collections(request.collection_name, request.collection_names)
-            retrieval_result, stream = await rag_service.aquery_stream(
+            retrieval_result, stream, stats = await rag_service.aquery_stream(
                 user_query=user_query,
                 collection_names=collections,
                 system_prompt=request.system_prompt,
@@ -261,8 +261,22 @@ async def rag_chat_stream(request: RAGChatRequest) -> StreamingResponse:
                 })
                 yield f"data: {data}\n\n"
             
-            # Send done signal
-            yield f"data: {json.dumps({'type': 'done', 'content': '', 'done': True})}\n\n"
+            # Send done signal with serving model/provider + token usage.
+            # Mirrors the fields returned by the non-streaming /api/rag/chat.
+            usage = stats.get("usage")
+            done_event: dict = {
+                "type": "done",
+                "content": "",
+                "provider": stats.get("provider"),
+                "model": stats.get("model"),
+                "usage": {
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                    "total_tokens": usage.get("total_tokens", 0),
+                } if usage else None,
+                "done": True,
+            }
+            yield f"data: {json.dumps(done_event)}\n\n"
         
         except AllKeysFailedError as e:
             error_data = json.dumps({

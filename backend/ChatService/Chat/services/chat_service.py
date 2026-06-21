@@ -375,8 +375,14 @@ class ChatService:
         provider: Optional[LLMProvider] = None,
         fallback: bool = False,
         model: Optional[str] = None,
+        stats: Optional[dict] = None,
     ) -> AsyncIterator[str]:
-        """Async stream chat with provider rotation."""
+        """Async stream chat with provider rotation.
+
+        If a ``stats`` dict is provided, it is populated with the serving
+        ``provider`` / ``model`` and token ``usage`` (when available) so callers
+        can surface them after the stream completes.
+        """
         if model and not provider:
             provider = get_provider_for_model(model)
             if provider is None:
@@ -391,19 +397,20 @@ class ChatService:
             config = self._get_next_provider()
         
         if fallback:
-            async for chunk in self._chat_stream_async_with_provider_fallback(session, config, model):
+            async for chunk in self._chat_stream_async_with_provider_fallback(session, config, model, stats=stats):
                 yield chunk
             return
         
         llm = self._get_or_create_llm(config, model)
-        async for chunk in llm.chat_stream_async(session):
+        async for chunk in llm.chat_stream_async(session, stats=stats):
             yield chunk
     
     async def _chat_stream_async_with_provider_fallback(
         self, 
         session: ChatSession,
         starting_config: ProviderConfig,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        stats: Optional[dict] = None,
     ) -> AsyncIterator[str]:
         """Async stream chat with provider-level fallback starting from rotated provider."""
         errors: dict[str, str] = {}
@@ -419,7 +426,7 @@ class ChatService:
             config = self._providers[(start_index + i) % len(self._providers)]
             try:
                 llm = self._get_or_create_llm(config, model)
-                async for chunk in llm.chat_stream_async(session):
+                async for chunk in llm.chat_stream_async(session, stats=stats):
                     yield chunk
                 return
             except AllKeysFailedError as e:

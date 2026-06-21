@@ -239,13 +239,15 @@ class CohereLLM(BaseLLM):
                     if content and hasattr(content, "text") and content.text:
                         yield content.text
     
-    async def _do_chat_stream_async(self, session: ChatSession) -> AsyncIterator[str]:
+    async def _do_chat_stream_async(self, session: ChatSession, *, stats=None) -> AsyncIterator[str]:
         """
         Raw async streaming call to Cohere via direct SDK.
         Resilience logic is handled by BaseLLM.chat_stream_async()
         
         Args:
             session: ChatSession with conversation history
+            stats: Optional dict; populated with token ``usage`` from the
+                   stream's ``message-end`` event when available.
             
         Yields:
             String chunks of the response
@@ -271,3 +273,25 @@ class CohereLLM(BaseLLM):
                     content = delta.message.content
                     if content and hasattr(content, "text") and content.text:
                         yield content.text
+            elif stats is not None and event.type == "message-end":
+                usage = self._usage_from_stream_event(event)
+                if usage:
+                    stats["usage"] = usage
+
+    @staticmethod
+    def _usage_from_stream_event(event) -> dict[str, int]:
+        """Extract token usage from a Cohere ``message-end`` stream event."""
+        delta = getattr(event, "delta", None)
+        usage = getattr(delta, "usage", None) if delta else None
+        tokens = getattr(usage, "tokens", None) if usage else None
+        if not tokens:
+            return {}
+        input_tokens = getattr(tokens, "input_tokens", 0) or 0
+        output_tokens = getattr(tokens, "output_tokens", 0) or 0
+        if not (input_tokens or output_tokens):
+            return {}
+        return {
+            "prompt_tokens": input_tokens,
+            "completion_tokens": output_tokens,
+            "total_tokens": input_tokens + output_tokens,
+        }

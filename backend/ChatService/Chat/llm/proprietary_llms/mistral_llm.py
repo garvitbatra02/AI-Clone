@@ -163,13 +163,18 @@ class MistralLLM(BaseLLM):
             if chunk.content:
                 yield chunk.content
     
-    async def _do_chat_stream_async(self, session: ChatSession) -> AsyncIterator[str]:
+    async def _do_chat_stream_async(self, session: ChatSession, *, stats=None) -> AsyncIterator[str]:
         """
         Raw async streaming call to Mistral AI via LangChain.
         Resilience logic is handled by BaseLLM.chat_stream_async()
         """
+        from ..base import normalize_langchain_usage
         messages = self._prepare_messages(session)
         
         async for chunk in self._client.astream(messages):
+            if stats is not None:
+                usage = normalize_langchain_usage(chunk)
+                if usage:
+                    stats["usage"] = usage
             if chunk.content:
                 yield chunk.content

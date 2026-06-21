@@ -17,13 +17,39 @@ never need to handle, pass, or even know about API keys.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Iterator, Optional, Any
+from typing import AsyncIterator, Dict, Iterator, Optional, Any
 from enum import Enum
 import logging
 
 from shared.key_rotation import KeyRotationMixin, AllKeysFailedError  # noqa: F401
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_langchain_usage(chunk: Any) -> Optional[Dict[str, int]]:
+    """
+    Extract a normalized token-usage dict from a LangChain streaming chunk.
+
+    LangChain chat models attach ``usage_metadata`` (input/output/total tokens)
+    to the final streamed ``AIMessageChunk``. Returns a dict with
+    ``prompt_tokens`` / ``completion_tokens`` / ``total_tokens`` when present,
+    otherwise None.
+    """
+    um = getattr(chunk, "usage_metadata", None)
+    if not um:
+        return None
+    # usage_metadata may be a dict or an object with attributes
+    get = um.get if isinstance(um, dict) else lambda k, d=0: getattr(um, k, d)
+    input_tokens = get("input_tokens", 0) or 0
+    output_tokens = get("output_tokens", 0) or 0
+    total = get("total_tokens", 0) or (input_tokens + output_tokens)
+    if not (input_tokens or output_tokens or total):
+        return None
+    return {
+        "prompt_tokens": input_tokens,
+        "completion_tokens": output_tokens,
+        "total_tokens": total,
+    }
 
 
 class LLMProvider(str, Enum):
@@ -204,10 +230,16 @@ class BaseLLM(KeyRotationMixin, ABC):
         pass
     
     @abstractmethod
-    async def _do_chat_stream_async(self, session: "ChatSession") -> AsyncIterator[str]:
+    async def _do_chat_stream_async(
+        self, session: "ChatSession", *, stats: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[str]:
         """
         Raw async streaming call without resilience logic.
         Subclasses implement the actual API call here.
+
+        If a ``stats`` dict is provided, implementations should populate
+        ``stats["usage"]`` with token usage (prompt/completion/total) when the
+        provider exposes it at the end of the stream.
         """
         pass
     
@@ -276,12 +308,18 @@ class BaseLLM(KeyRotationMixin, ABC):
             model_label=self.config.model,
         )
     
-    async def chat_stream_async(self, session: "ChatSession") -> AsyncIterator[str]:
+    async def chat_stream_async(
+        self, session: "ChatSession", *, stats: Optional[Dict[str, Any]] = None
+    ) -> AsyncIterator[str]:
         """
         Async stream chat with automatic key rotation on failure.
         
         Args:
             session: ChatSession containing the conversation history
+            stats: Optional mutable dict. When provided, this method records
+                   ``provider`` and ``model`` of the serving LLM, and the
+                   underlying provider populates ``usage`` (token counts) when
+                   available. The caller reads it after the stream completes.
             
         Yields:
             String chunks of the response as they arrive
@@ -289,8 +327,11 @@ class BaseLLM(KeyRotationMixin, ABC):
         Raises:
             AllKeysFailedError: If all API keys fail
         """
+        if stats is not None:
+            stats["provider"] = self.provider.value
+            stats["model"] = self.config.model
         async for chunk in self._stream_with_rotation_async(
-            operation=lambda: self._do_chat_stream_async(session),
+            operation=lambda: self._do_chat_stream_async(session, stats=stats),
             service_label=self.provider.value,
             model_label=self.config.model,
         ):

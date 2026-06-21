@@ -542,12 +542,17 @@ class RAGService:
         model: Optional[str] = None,
         top_k: Optional[int] = None,
         rerank_top_n: Optional[int] = None,
-    ) -> tuple[RetrievalResult, AsyncIterator[str]]:
+    ) -> tuple[RetrievalResult, AsyncIterator[str], Dict[str, Any]]:
         """
         Async version of query_stream.
         
         Returns:
-            Tuple of (RetrievalResult, AsyncIterator[str] for streaming chunks)
+            Tuple of (RetrievalResult, AsyncIterator[str], stats):
+              - RetrievalResult: retrieved context + sources
+              - AsyncIterator[str]: streaming LLM chunks
+              - stats: a dict populated AS THE STREAM IS CONSUMED with the
+                serving ``provider`` / ``model`` and token ``usage`` (when the
+                provider exposes it). Read it after the stream completes.
         """
         # Stage 1: Async retrieve
         retrieval_result = await self._aroute_retrieve(
@@ -568,15 +573,17 @@ class RAGService:
             sources=retrieval_result.source_chunks,
         )
         
-        # Stage 3: Async stream generate
+        # Stage 3: Async stream generate (stats populated during consumption)
+        stats: Dict[str, Any] = {}
         stream = self._chat_service.chat_stream_async(
             session=rag_session,
             provider=provider,
             fallback=True,
             model=model,
+            stats=stats,
         )
         
-        return retrieval_result, stream
+        return retrieval_result, stream, stats
     
     # ==================== Utility Methods ====================
     
