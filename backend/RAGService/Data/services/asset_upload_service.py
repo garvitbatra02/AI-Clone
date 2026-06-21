@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
@@ -257,6 +258,86 @@ class AssetUploadService:
                 )
             self._created_collections.add(collection_name)
     
+    def _stamp_upload_metadata(
+        self,
+        chunks: Sequence[DocumentChunk],
+        *,
+        source: str,
+        file_type: Optional[str] = None,
+        file_size_bytes: Optional[int] = None,
+    ) -> None:
+        """
+        Stamp consistent file-level fields onto every chunk's payload.
+
+        The two chunking paths (SmartChunker vs the raw-text splitter) use
+        slightly different metadata keys (``source_file`` vs ``source``,
+        ``ingested_at`` vs none). This writes a single canonical set of
+        fields onto each chunk so the admin panel can reliably list, filter,
+        and group files by ``source``:
+
+          - ``source``          canonical file identifier (name or path)
+          - ``file_type``       extension / type for the file-type icon
+          - ``uploaded_at``     ISO-8601 timestamp of this upload
+          - ``file_size_bytes`` size on disk (when known)
+
+        Existing keys from the chunker (e.g. ``source_file``, ``chunk_index``)
+        are preserved.
+        """
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+        for chunk in chunks:
+            chunk.metadata["source"] = source
+            chunk.metadata["uploaded_at"] = uploaded_at
+            if file_type:
+                chunk.metadata["file_type"] = file_type
+            if file_size_bytes is not None:
+                chunk.metadata["file_size_bytes"] = file_size_bytes
+
+    @staticmethod
+    def _normalize_source(payload: Dict[str, Any]) -> str:
+        """Resolve a chunk's canonical source, tolerant of legacy payloads."""
+        return payload.get("source") or payload.get("source_file") or "unknown"
+
+    def _group_files(
+        self,
+        rows: Sequence[tuple[str, Dict[str, Any]]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Group scrolled (id, payload) rows into per-file summaries.
+
+        Returns one entry per distinct source, with chunk counts and the
+        best-available file_type / uploaded_at / file_size_bytes, sorted by
+        upload time (newest first).
+        """
+        files: Dict[str, Dict[str, Any]] = {}
+        for _id, payload in rows:
+            source = self._normalize_source(payload)
+            entry = files.get(source)
+            if entry is None:
+                entry = {
+                    "source": source,
+                    "chunk_count": 0,
+                    "file_type": None,
+                    "uploaded_at": None,
+                    "file_size_bytes": None,
+                }
+                files[source] = entry
+
+            entry["chunk_count"] += 1
+            if entry["file_type"] is None:
+                entry["file_type"] = payload.get("file_type")
+            if entry["uploaded_at"] is None:
+                entry["uploaded_at"] = (
+                    payload.get("uploaded_at") or payload.get("ingested_at")
+                )
+            if entry["file_size_bytes"] is None:
+                entry["file_size_bytes"] = payload.get("file_size_bytes")
+
+        return sorted(
+            files.values(),
+            key=lambda f: f["uploaded_at"] or "",
+            reverse=True,
+        )
+
     def _embed_chunks(
         self,
         chunks: List[DocumentChunk],
@@ -332,6 +413,14 @@ class AssetUploadService:
                     metadata={"message": "No content to upload"}
                 )
             
+            # Stamp canonical file-level fields for the admin panel
+            self._stamp_upload_metadata(
+                chunks,
+                source=(metadata or {}).get("original_filename") or str(path),
+                file_type=file_type,
+                file_size_bytes=path.stat().st_size if path.exists() else None,
+            )
+            
             # Generate embeddings
             self._embed_chunks(chunks)
             
@@ -392,6 +481,14 @@ class AssetUploadService:
                     source=str(path),
                     metadata={"message": "No content to upload"}
                 )
+            
+            # Stamp canonical file-level fields for the admin panel
+            self._stamp_upload_metadata(
+                chunks,
+                source=(metadata or {}).get("original_filename") or str(path),
+                file_type=file_type,
+                file_size_bytes=path.stat().st_size if path.exists() else None,
+            )
             
             await self._async_embed_chunks(chunks)
             
@@ -559,6 +656,14 @@ class AssetUploadService:
                     metadata={"message": "No content to upload"}
                 )
             
+            # Stamp canonical file-level fields for the admin panel
+            self._stamp_upload_metadata(
+                chunks,
+                source=source or "manual_input",
+                file_type="text",
+                file_size_bytes=len(text.encode("utf-8")),
+            )
+            
             # Generate embeddings
             self._embed_chunks(chunks)
             
@@ -611,6 +716,14 @@ class AssetUploadService:
                     source=source,
                     metadata={"message": "No content to upload"}
                 )
+            
+            # Stamp canonical file-level fields for the admin panel
+            self._stamp_upload_metadata(
+                chunks,
+                source=source or "manual_input",
+                file_type="text",
+                file_size_bytes=len(text.encode("utf-8")),
+            )
             
             await self._async_embed_chunks(chunks)
             
@@ -676,6 +789,12 @@ class AssetUploadService:
                 )
                 
                 chunks = self._splitter.split_document(doc)
+                self._stamp_upload_metadata(
+                    chunks,
+                    source=source,
+                    file_type="text",
+                    file_size_bytes=len(text.encode("utf-8")),
+                )
                 all_chunks.extend(chunks)
             
             if not all_chunks:
@@ -735,6 +854,12 @@ class AssetUploadService:
                 )
                 
                 chunks = self._splitter.split_document(doc)
+                self._stamp_upload_metadata(
+                    chunks,
+                    source=source,
+                    file_type="text",
+                    file_size_bytes=len(text.encode("utf-8")),
+                )
                 all_chunks.extend(chunks)
             
             if not all_chunks:
@@ -826,6 +951,126 @@ class AssetUploadService:
         result = await self._vectordb.async_delete_collection(collection_name)
         self._created_collections.discard(collection_name)
         return result
+    
+    # ==================== File-level Operations (Admin Panel) ====================
+    
+    def list_files(self, collection_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        List the distinct source files inside a collection.
+        
+        Scrolls every point in the collection and groups them by their
+        ``source`` payload field, returning one summary per file with chunk
+        counts and file metadata.
+        
+        Args:
+            collection_name: Target collection (uses default if not provided).
+            
+        Returns:
+            List of file summaries: ``{source, chunk_count, file_type,
+            uploaded_at, file_size_bytes}``, newest upload first.
+        """
+        collection = collection_name or self.config.default_collection
+        if not self._vectordb.collection_exists(collection):
+            return []
+        rows = self._vectordb.scroll_all(collection_name=collection)
+        return self._group_files(rows)
+    
+    async def async_list_files(
+        self, collection_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Async version of list_files."""
+        collection = collection_name or self.config.default_collection
+        if not await self._vectordb.async_collection_exists(collection):
+            return []
+        rows = await self._vectordb.async_scroll_all(collection_name=collection)
+        return self._group_files(rows)
+    
+    def get_file_chunks(
+        self, source: str, collection_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Return all chunks belonging to a single source file, ordered by index.
+        
+        Args:
+            source: The source identifier to filter on.
+            collection_name: Target collection (uses default if not provided).
+            
+        Returns:
+            List of chunk dicts: ``{id, chunk_index, content, metadata}``.
+        """
+        collection = collection_name or self.config.default_collection
+        if not self._vectordb.collection_exists(collection):
+            return []
+        rows = self._vectordb.scroll_all(collection_name=collection)
+        return self._collect_file_chunks(rows, source)
+    
+    async def async_get_file_chunks(
+        self, source: str, collection_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Async version of get_file_chunks."""
+        collection = collection_name or self.config.default_collection
+        if not await self._vectordb.async_collection_exists(collection):
+            return []
+        rows = await self._vectordb.async_scroll_all(collection_name=collection)
+        return self._collect_file_chunks(rows, source)
+    
+    def delete_file(
+        self, source: str, collection_name: Optional[str] = None
+    ) -> int:
+        """
+        Delete every chunk belonging to a single source file.
+        
+        Args:
+            source: The source identifier to delete.
+            collection_name: Target collection (uses default if not provided).
+            
+        Returns:
+            Number of chunks deleted (0 if the file/collection was not found).
+        """
+        collection = collection_name or self.config.default_collection
+        if not self._vectordb.collection_exists(collection):
+            return 0
+        rows = self._vectordb.scroll_all(collection_name=collection)
+        ids = [rid for rid, payload in rows if self._normalize_source(payload) == source]
+        if not ids:
+            return 0
+        self._vectordb.delete_by_ids(ids, collection_name=collection)
+        return len(ids)
+    
+    async def async_delete_file(
+        self, source: str, collection_name: Optional[str] = None
+    ) -> int:
+        """Async version of delete_file."""
+        collection = collection_name or self.config.default_collection
+        if not await self._vectordb.async_collection_exists(collection):
+            return 0
+        rows = await self._vectordb.async_scroll_all(collection_name=collection)
+        ids = [rid for rid, payload in rows if self._normalize_source(payload) == source]
+        if not ids:
+            return 0
+        await self._vectordb.async_delete_by_ids(ids, collection_name=collection)
+        return len(ids)
+    
+    def _collect_file_chunks(
+        self,
+        rows: Sequence[tuple[str, Dict[str, Any]]],
+        source: str,
+    ) -> List[Dict[str, Any]]:
+        """Filter scrolled rows to one source, ordered by chunk_index."""
+        chunks: List[Dict[str, Any]] = []
+        for rid, payload in rows:
+            if self._normalize_source(payload) != source:
+                continue
+            payload = dict(payload)
+            content = payload.pop("content", "")
+            chunks.append({
+                "id": rid,
+                "chunk_index": payload.get("chunk_index", 0),
+                "content": content,
+                "metadata": payload,
+            })
+        chunks.sort(key=lambda c: c["chunk_index"])
+        return chunks
     
     # ==================== Preview (Dashboard) ====================
     

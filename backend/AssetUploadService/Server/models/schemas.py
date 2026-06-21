@@ -78,6 +78,71 @@ class CreateCollectionResponse(BaseModel):
     )
 
 
+# ==================== File-level Schemas (Admin Panel) ====================
+
+
+class FileInfoSchema(BaseModel):
+    """Summary of a single source file inside a collection."""
+    source: str = Field(..., description="Source file name or identifier")
+    chunk_count: int = Field(..., description="Number of chunks stored for this file")
+    file_type: Optional[str] = Field(
+        default=None, description="File type / extension (e.g. 'pdf', 'txt')",
+    )
+    uploaded_at: Optional[str] = Field(
+        default=None, description="ISO-8601 timestamp of when the file was uploaded",
+    )
+    file_size_bytes: Optional[int] = Field(
+        default=None, description="Original file size in bytes (when known)",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "source": "research.pdf",
+                "chunk_count": 42,
+                "file_type": "pdf",
+                "uploaded_at": "2026-06-21T10:30:00+00:00",
+                "file_size_bytes": 245000,
+            }
+        }
+
+
+class FileListResponse(BaseModel):
+    """Response listing all distinct files within a collection."""
+    files: List[FileInfoSchema] = Field(
+        default_factory=list, description="Files in the collection",
+    )
+    total: int = Field(default=0, description="Total number of distinct files")
+
+
+class FileChunkSchema(BaseModel):
+    """A single stored chunk belonging to a file."""
+    id: str = Field(..., description="Vector point ID")
+    chunk_index: int = Field(..., description="Zero-based chunk index within the file")
+    content: str = Field(..., description="Chunk text content")
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict, description="Chunk payload metadata",
+    )
+
+
+class FileChunksResponse(BaseModel):
+    """All chunks belonging to a single source file."""
+    source: str = Field(..., description="Source file name or identifier")
+    chunks: List[FileChunkSchema] = Field(
+        default_factory=list, description="Chunks ordered by chunk_index",
+    )
+    total: int = Field(default=0, description="Total number of chunks for this file")
+
+
+class DeleteFileResponse(BaseModel):
+    """Result of deleting a single file's chunks."""
+    success: bool = Field(..., description="Whether the delete succeeded")
+    source: str = Field(..., description="Source that was targeted")
+    deleted_chunks: int = Field(
+        default=0, description="Number of chunks deleted (0 if file not found)",
+    )
+
+
 # ==================== Upload Preview Schemas ====================
 
 

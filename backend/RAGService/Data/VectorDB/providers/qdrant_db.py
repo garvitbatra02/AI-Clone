@@ -728,3 +728,59 @@ class QdrantVectorDB(BaseVectorDB):
         name = self._get_collection_name(collection_name)
         info = await self._async_client.get_collection(collection_name=name)
         return info.points_count or 0
+    
+    def scroll_all(
+        self,
+        collection_name: Optional[str] = None,
+        scroll_filter: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
+        batch_size: int = 256,
+    ) -> List[tuple[str, Dict[str, Any]]]:
+        """Page through every point in a Qdrant collection (no vector search)."""
+        name = self._get_collection_name(collection_name)
+        qfilter = self._build_qdrant_filter(scroll_filter) if scroll_filter else None
+        
+        results: List[tuple[str, Dict[str, Any]]] = []
+        offset = None
+        while True:
+            points, offset = self._client.scroll(
+                collection_name=name,
+                scroll_filter=qfilter,
+                limit=batch_size,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                results.append((str(point.id), point.payload or {}))
+            if offset is None:
+                break
+        
+        return results
+    
+    async def async_scroll_all(
+        self,
+        collection_name: Optional[str] = None,
+        scroll_filter: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
+        batch_size: int = 256,
+    ) -> List[tuple[str, Dict[str, Any]]]:
+        """Async version of scroll_all."""
+        name = self._get_collection_name(collection_name)
+        qfilter = self._build_qdrant_filter(scroll_filter) if scroll_filter else None
+        
+        results: List[tuple[str, Dict[str, Any]]] = []
+        offset = None
+        while True:
+            points, offset = await self._async_client.scroll(
+                collection_name=name,
+                scroll_filter=qfilter,
+                limit=batch_size,
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                results.append((str(point.id), point.payload or {}))
+            if offset is None:
+                break
+        
+        return results

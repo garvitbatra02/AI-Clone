@@ -54,7 +54,7 @@ DEFAULT_RAG_PROVIDERS = [
     ),
     ProviderConfig(
         provider=LLMProvider.CEREBRAS,
-        default_model="llama3.1-8b",
+        default_model="zai-glm-4.7",
     ),
     ProviderConfig(
         provider=LLMProvider.NVIDIA,

@@ -332,6 +332,28 @@ class DashboardService:
     
     async def async_delete_collection(self, name: str) -> bool:
         return await self._core.async_delete_collection(name)
+    
+    # ------------------------------------------------------------------
+    #  File-level management (delegates to core)
+    # ------------------------------------------------------------------
+    
+    async def async_list_files(
+        self, collection_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """List distinct source files inside a collection."""
+        return await self._core.async_list_files(collection_name)
+    
+    async def async_get_file_chunks(
+        self, source: str, collection_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Return all chunks for a single source file, ordered by index."""
+        return await self._core.async_get_file_chunks(source, collection_name)
+    
+    async def async_delete_file(
+        self, source: str, collection_name: Optional[str] = None,
+    ) -> int:
+        """Delete every chunk belonging to a single source file."""
+        return await self._core.async_delete_file(source, collection_name)
 
 
 # ---------------------------------------------------------------------------

@@ -588,6 +588,43 @@ class BaseVectorDB(ABC):
         """Async version of count."""
         pass
     
+    def scroll_all(
+        self,
+        collection_name: Optional[str] = None,
+        scroll_filter: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
+        batch_size: int = 256,
+    ) -> List[tuple[str, Dict[str, Any]]]:
+        """
+        Iterate over every point in a collection, returning (id, payload) pairs.
+        
+        Unlike search, this performs no vector similarity — it simply pages
+        through all stored points (optionally filtered by metadata). Useful
+        for grouping/aggregating points by a payload field (e.g. listing the
+        distinct source files inside a collection).
+        
+        Args:
+            collection_name: Target collection (uses config if not provided).
+            scroll_filter: Optional metadata filter to restrict the scan.
+            batch_size: Number of points to fetch per page.
+            
+        Returns:
+            List of (point_id, payload_dict) tuples for every matching point.
+        """
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement scroll_all()"
+        )
+    
+    async def async_scroll_all(
+        self,
+        collection_name: Optional[str] = None,
+        scroll_filter: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
+        batch_size: int = 256,
+    ) -> List[tuple[str, Dict[str, Any]]]:
+        """Async version of scroll_all."""
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not implement async_scroll_all()"
+        )
+    
     def _get_collection_name(self, collection_name: Optional[str] = None) -> str:
         """Get the collection name, falling back to config if not provided."""
         return collection_name or self.config.collection_name

@@ -19,11 +19,11 @@ class CerebrasLLM(BaseLLM):
     Resilience features (key rotation, retry on empty) are inherited from BaseLLM.
     
     Supports models like:
-    - llama3.1-8b
+    - zai-glm-4.7
     - gpt-oss-120b
     
     Example:
-        config = LLMConfig(model="llama3.1-8b")
+        config = LLMConfig(model="zai-glm-4.7")
         llm = CerebrasLLM(config)  # Keys loaded from CEREBRAS_API_KEYS env var
         response = llm.chat(session)  # Automatic key rotation on failure
     """
