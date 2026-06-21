@@ -162,6 +162,14 @@ class RAGChatRequest(BaseModel):
         description="Vector DB collection to search for context. "
                     "If omitted, uses the server's DEFAULT_COLLECTION.",
     )
+    collection_names: Optional[list[str]] = Field(
+        default=None,
+        description="Multiple collections to search and merge. When 2+ are "
+                    "provided, candidates from every collection are pooled, "
+                    "globally re-ranked by score, and the best are used. Takes "
+                    "precedence over collection_name. A single entry behaves like "
+                    "collection_name.",
+    )
     system_prompt: Optional[str] = Field(
         default=None,
         description="Additional system prompt (appended after RAG context)",
@@ -263,6 +271,12 @@ class RAGSearchRequest(BaseModel):
         default=None,
         description="Vector DB collection to search. "
                     "If omitted, uses the server's DEFAULT_COLLECTION.",
+    )
+    collection_names: Optional[list[str]] = Field(
+        default=None,
+        description="Multiple collections to search and merge. When 2+ are "
+                    "provided, candidates are pooled and globally re-ranked. "
+                    "Takes precedence over collection_name.",
     )
     top_k: Optional[int] = Field(
         default=None,

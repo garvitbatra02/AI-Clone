@@ -11,12 +11,14 @@ ready for injection into LLM prompts.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 
+from RAGService.Data.Embeddings import EmbeddingInputType
 from RAGService.Data.VectorDB.base import (
     MetadataFilter,
     MetadataFilterGroup,
@@ -46,6 +48,15 @@ class RetrievalConfig:
         rerank_enabled: Whether to rerank results using a cross-encoder model
         rerank_model: Reranker model name
         rerank_top_n: Number of results to keep after reranking
+        max_pool: Global ceiling on the merged candidate pool when searching
+                  MULTIPLE collections (used only by retrieve_multi/aretrieve_multi).
+                  After each collection is searched with ``top_k`` and merged, the
+                  pool is sorted by vector score and truncated to this many
+                  candidates before reranking. This is a runaway-protection valve
+                  only — the cut is purely score-based and cross-collection, never
+                  a per-collection quota, so a collection holding all the best
+                  chunks keeps all of them. Does not affect single-collection
+                  retrieve()/aretrieve().
         context_template: Template for formatting each chunk in the context string.
                          Supports {i} (1-based index), {content}, {score}, {source}, {id}.
         context_separator: Separator between formatted chunks
@@ -56,6 +67,7 @@ class RetrievalConfig:
     rerank_enabled: bool = True
     rerank_model: str = "rerank-v3.5"
     rerank_top_n: int = 5
+    max_pool: int = 80
     context_template: str = CONTEXT_CHUNK_TEMPLATE
     context_separator: str = CONTEXT_SEPARATOR
     context_header: str = CONTEXT_HEADER
@@ -69,6 +81,7 @@ class RetrievalConfig:
             rerank_enabled=os.environ.get("RETRIEVAL_RERANK_ENABLED", "true").lower() == "true",
             rerank_model=os.environ.get("RETRIEVAL_RERANK_MODEL", "rerank-v3.5"),
             rerank_top_n=int(os.environ.get("RETRIEVAL_RERANK_TOP_N", "5")),
+            max_pool=int(os.environ.get("RETRIEVAL_MAX_POOL", "80")),
         )
 
 
@@ -83,12 +96,16 @@ class RetrievalResult:
         query: The original query string
         reranked: Whether results were reranked
         total_candidates: Number of candidates from vector search before reranking
+        collections: The collection name(s) that were searched. Empty for the
+                     legacy single-collection path; populated by the multi-
+                     collection methods.
     """
     context_str: str
     source_chunks: List[SearchResult]
     query: str
     reranked: bool = False
     total_candidates: int = 0
+    collections: List[Optional[str]] = field(default_factory=list)
 
 
 # ==================== Service ====================
@@ -373,6 +390,317 @@ class RetrievalService:
             query=query,
             reranked=reranked,
             total_candidates=total_candidates,
+        )
+    
+    # ==================== Multi-Collection Retrieval (Additive) ====================
+    #
+    # These methods are fully separate from the single-collection retrieve()/
+    # aretrieve() above, which remain unchanged. They search several collections,
+    # pool every candidate into ONE list, sort by vector score (comparable because
+    # all collections share the same embedding model + distance metric), cap the
+    # pool at config.max_pool, then rerank. The cap is global and score-ordered —
+    # never a per-collection quota — so a collection holding all the best chunks
+    # keeps all of them; weak/redundant chunks lose only because better chunks
+    # exist somewhere. The reranker is the final gate.
+    
+    @staticmethod
+    def _normalize_collections(
+        collection_names: Optional[Sequence[str]],
+        collection_name: Optional[str] = None,
+    ) -> List[str]:
+        """
+        Resolve caller input to an ordered, de-duplicated list of collection names.
+        
+        Accepts a list (``collection_names``) and/or a single name
+        (``collection_name``). Blank entries are dropped. Returns an empty list
+        if nothing valid is provided.
+        """
+        raw: List[str] = []
+        if collection_names:
+            raw.extend(c for c in collection_names if c and c.strip())
+        if collection_name and collection_name.strip():
+            raw.append(collection_name)
+        
+        seen: set = set()
+        ordered: List[str] = []
+        for name in raw:
+            if name not in seen:
+                seen.add(name)
+                ordered.append(name)
+        return ordered
+    
+    def _pool_and_cap(
+        self,
+        result_lists: Sequence[List[SearchResult]],
+    ) -> tuple[List[SearchResult], int]:
+        """
+        Merge per-collection result lists into one globally score-ordered pool.
+        
+        Returns ``(capped_pool, total_before_cap)``. The pool is sorted by
+        descending vector score across all collections, then truncated to
+        ``config.max_pool``.
+        """
+        pool: List[SearchResult] = [r for sub in result_lists for r in sub]
+        total = len(pool)
+        pool.sort(key=lambda r: r.score, reverse=True)
+        return pool[: self.config.max_pool], total
+    
+    def _search_one_by_vector(
+        self,
+        embedding: List[float],
+        collection_name: str,
+        top_k: int,
+        score_threshold: Optional[float],
+        filters: Optional[Union[MetadataFilter, MetadataFilterGroup]],
+    ) -> List[SearchResult]:
+        """Search a single collection by a precomputed vector. Never raises."""
+        try:
+            if not self.vectordb_service.collection_exists(collection_name):
+                logger.warning(f"Collection '{collection_name}' does not exist; skipping")
+                return []
+            results = self.vectordb_service.search_by_vector(
+                embedding=embedding,
+                k=top_k,
+                filters=filters,
+                collection_name=collection_name,
+                score_threshold=score_threshold,
+            )
+            for r in results:
+                r.metadata.setdefault("collection", collection_name)
+            return results
+        except Exception as e:
+            logger.warning(f"Search failed for collection '{collection_name}': {e}")
+            return []
+    
+    async def _asearch_one_by_vector(
+        self,
+        embedding: List[float],
+        collection_name: str,
+        top_k: int,
+        score_threshold: Optional[float],
+        filters: Optional[Union[MetadataFilter, MetadataFilterGroup]],
+    ) -> List[SearchResult]:
+        """Async single-collection search by precomputed vector. Never raises."""
+        try:
+            if not await self.vectordb_service.async_collection_exists(collection_name):
+                logger.warning(f"Collection '{collection_name}' does not exist; skipping")
+                return []
+            results = await self.vectordb_service.async_search_by_vector(
+                embedding=embedding,
+                k=top_k,
+                filters=filters,
+                collection_name=collection_name,
+                score_threshold=score_threshold,
+            )
+            for r in results:
+                r.metadata.setdefault("collection", collection_name)
+            return results
+        except Exception as e:
+            logger.warning(f"Async search failed for collection '{collection_name}': {e}")
+            return []
+    
+    def _finalize_pool(
+        self,
+        query: str,
+        candidates: List[SearchResult],
+        total_candidates: int,
+        collections: List[str],
+        rerank_top_n: Optional[int],
+    ) -> RetrievalResult:
+        """Shared tail for the sync multi path: rerank (optional) + format."""
+        if not candidates:
+            return RetrievalResult(
+                context_str="",
+                source_chunks=[],
+                query=query,
+                reranked=False,
+                total_candidates=0,
+                collections=list(collections),
+            )
+        
+        reranked = False
+        reranker = self._get_reranker()
+        if reranker is not None and len(candidates) > 1:
+            effective_top_n = rerank_top_n or self.config.rerank_top_n
+            try:
+                candidates = reranker.rerank(
+                    query=query, results=candidates, top_n=effective_top_n,
+                )
+                reranked = True
+                logger.info(
+                    f"Reranked pool of {total_candidates} to {len(candidates)} results"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Reranking failed: {e}. Using pooled vector results directly."
+                )
+        
+        return RetrievalResult(
+            context_str=self._format_context(candidates),
+            source_chunks=candidates,
+            query=query,
+            reranked=reranked,
+            total_candidates=total_candidates,
+            collections=list(collections),
+        )
+    
+    async def _afinalize_pool(
+        self,
+        query: str,
+        candidates: List[SearchResult],
+        total_candidates: int,
+        collections: List[str],
+        rerank_top_n: Optional[int],
+    ) -> RetrievalResult:
+        """Shared tail for the async multi path: rerank (optional) + format."""
+        if not candidates:
+            return RetrievalResult(
+                context_str="",
+                source_chunks=[],
+                query=query,
+                reranked=False,
+                total_candidates=0,
+                collections=list(collections),
+            )
+        
+        reranked = False
+        reranker = self._get_reranker()
+        if reranker is not None and len(candidates) > 1:
+            effective_top_n = rerank_top_n or self.config.rerank_top_n
+            try:
+                candidates = await reranker.arerank(
+                    query=query, results=candidates, top_n=effective_top_n,
+                )
+                reranked = True
+                logger.info(
+                    f"Async reranked pool of {total_candidates} to {len(candidates)} results"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Async reranking failed: {e}. Using pooled vector results directly."
+                )
+        
+        return RetrievalResult(
+            context_str=self._format_context(candidates),
+            source_chunks=candidates,
+            query=query,
+            reranked=reranked,
+            total_candidates=total_candidates,
+            collections=list(collections),
+        )
+    
+    def retrieve_multi(
+        self,
+        query: str,
+        collection_names: Sequence[str],
+        filters: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
+        top_k: Optional[int] = None,
+        rerank_top_n: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+    ) -> RetrievalResult:
+        """
+        Retrieve across multiple collections: search each → global pool → rerank.
+        
+        Embeds the query once, searches every collection with ``top_k``, merges
+        all candidates into one score-ordered pool capped at ``config.max_pool``,
+        then reranks down to ``rerank_top_n``. Missing/failing collections are
+        skipped with a warning. Independent of single-collection retrieve().
+        
+        Args:
+            query: The search query
+            collection_names: Collections to search and merge
+            filters: Optional metadata filters applied to every collection
+            top_k: Override for candidates fetched per collection
+            rerank_top_n: Override for results kept after reranking
+            score_threshold: Override for minimum similarity score
+            
+        Returns:
+            RetrievalResult with pooled, reranked chunks and the searched collections
+        """
+        collections = self._normalize_collections(collection_names)
+        if not collections:
+            return RetrievalResult(
+                context_str="", source_chunks=[], query=query,
+                reranked=False, total_candidates=0, collections=[],
+            )
+        
+        effective_top_k = top_k or self.config.top_k
+        effective_threshold = (
+            score_threshold if score_threshold is not None else self.config.score_threshold
+        )
+        
+        logger.info(
+            f"Multi-retrieve for query '{query[:80]}...' "
+            f"(top_k={effective_top_k}, collections={collections})"
+        )
+        
+        embedding = self.vectordb_service.embeddings.embed_query(
+            query, input_type=EmbeddingInputType.SEARCH_QUERY
+        )
+        result_lists = [
+            self._search_one_by_vector(
+                embedding, name, effective_top_k, effective_threshold, filters,
+            )
+            for name in collections
+        ]
+        candidates, total = self._pool_and_cap(result_lists)
+        logger.info(
+            f"Pooled {total} candidates across {len(collections)} collection(s); "
+            f"capped to {len(candidates)}"
+        )
+        
+        return self._finalize_pool(query, candidates, total, collections, rerank_top_n)
+    
+    async def aretrieve_multi(
+        self,
+        query: str,
+        collection_names: Sequence[str],
+        filters: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
+        top_k: Optional[int] = None,
+        rerank_top_n: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+    ) -> RetrievalResult:
+        """
+        Async multi-collection retrieval. Collections are searched concurrently
+        via ``asyncio.gather``, so latency for N collections is ~the slowest
+        single search, not the sum. See retrieve_multi for full semantics.
+        """
+        collections = self._normalize_collections(collection_names)
+        if not collections:
+            return RetrievalResult(
+                context_str="", source_chunks=[], query=query,
+                reranked=False, total_candidates=0, collections=[],
+            )
+        
+        effective_top_k = top_k or self.config.top_k
+        effective_threshold = (
+            score_threshold if score_threshold is not None else self.config.score_threshold
+        )
+        
+        logger.info(
+            f"Async multi-retrieve for query '{query[:80]}...' "
+            f"(top_k={effective_top_k}, collections={collections})"
+        )
+        
+        embedding = await self.vectordb_service.embeddings.async_embed_query(
+            query, input_type=EmbeddingInputType.SEARCH_QUERY
+        )
+        result_lists = await asyncio.gather(
+            *[
+                self._asearch_one_by_vector(
+                    embedding, name, effective_top_k, effective_threshold, filters,
+                )
+                for name in collections
+            ]
+        )
+        candidates, total = self._pool_and_cap(result_lists)
+        logger.info(
+            f"Async pooled {total} candidates across {len(collections)} collection(s); "
+            f"capped to {len(candidates)}"
+        )
+        
+        return await self._afinalize_pool(
+            query, candidates, total, collections, rerank_top_n,
         )
     
     # ==================== Utility Methods ====================

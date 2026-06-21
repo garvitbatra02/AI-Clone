@@ -78,6 +78,29 @@ def _resolve_collection(name: str | None) -> str:
     return default
 
 
+def _resolve_collections(
+    collection_name: str | None,
+    collection_names: list[str] | None,
+) -> list[str]:
+    """
+    Resolve the request's collection target(s) to an ordered, de-duplicated list.
+
+    Prefers the plural ``collection_names`` (multi-collection). Falls back to the
+    singular ``collection_name`` (with DEFAULT_COLLECTION env fallback / 400) so
+    existing single-collection callers behave exactly as before.
+    """
+    seen: set = set()
+    names: list[str] = []
+    for n in collection_names or []:
+        if n and n.strip() and n not in seen:
+            seen.add(n)
+            names.append(n)
+    if names:
+        return names
+    # Back-compat single-collection path (enforces DEFAULT_COLLECTION / 400)
+    return [_resolve_collection(collection_name)]
+
+
 @router.post(
     "/chat",
     response_model=RAGChatResponse,
@@ -116,10 +139,10 @@ async def rag_chat(request: RAGChatRequest) -> RAGChatResponse:
         provider = LLMProvider(request.provider.value)
     
     try:
-        collection = _resolve_collection(request.collection_name)
+        collections = _resolve_collections(request.collection_name, request.collection_names)
         response = await rag_service.aquery(
             user_query=user_query,
-            collection_name=collection,
+            collection_names=collections,
             system_prompt=request.system_prompt,
             provider=provider,
             model=request.model,
@@ -201,10 +224,10 @@ async def rag_chat_stream(request: RAGChatRequest) -> StreamingResponse:
     
     async def generate() -> AsyncGenerator[str, None]:
         try:
-            collection = _resolve_collection(request.collection_name)
+            collections = _resolve_collections(request.collection_name, request.collection_names)
             retrieval_result, stream = await rag_service.aquery_stream(
                 user_query=user_query,
-                collection_name=collection,
+                collection_names=collections,
                 system_prompt=request.system_prompt,
                 provider=provider,
                 model=request.model,
@@ -291,14 +314,23 @@ async def rag_search(request: RAGSearchRequest) -> RAGSearchResponse:
     retrieval_service = _get_retrieval_service()
     
     try:
-        collection = _resolve_collection(request.collection_name)
-        result = await retrieval_service.aretrieve(
-            query=request.query,
-            collection_name=collection,
-            top_k=request.top_k,
-            rerank_top_n=request.rerank_top_n if request.rerank else None,
-            score_threshold=request.score_threshold,
-        )
+        collections = _resolve_collections(request.collection_name, request.collection_names)
+        if len(collections) >= 2:
+            result = await retrieval_service.aretrieve_multi(
+                query=request.query,
+                collection_names=collections,
+                top_k=request.top_k,
+                rerank_top_n=request.rerank_top_n if request.rerank else None,
+                score_threshold=request.score_threshold,
+            )
+        else:
+            result = await retrieval_service.aretrieve(
+                query=request.query,
+                collection_name=collections[0],
+                top_k=request.top_k,
+                rerank_top_n=request.rerank_top_n if request.rerank else None,
+                score_threshold=request.score_threshold,
+            )
         
         return RAGSearchResponse(
             query=result.query,

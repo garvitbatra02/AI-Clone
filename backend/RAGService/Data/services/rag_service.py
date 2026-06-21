@@ -18,7 +18,7 @@ import logging
 import os
 import threading
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Sequence, Union
 
 from ChatService.Chat.llm.base import LLMProvider, LLMResponse
 from ChatService.Chat.services.chat_service import (
@@ -240,12 +240,89 @@ class RAGService:
         
         return session
     
+    # ==================== Collection Routing (Additive) ====================
+    
+    @staticmethod
+    def _resolve_collection_names(
+        collection_names: Optional[Sequence[str]],
+    ) -> List[str]:
+        """De-duplicate and strip a list of collection names, preserving order."""
+        if not collection_names:
+            return []
+        seen: set = set()
+        ordered: List[str] = []
+        for name in collection_names:
+            if name and name.strip() and name not in seen:
+                seen.add(name)
+                ordered.append(name)
+        return ordered
+    
+    def _route_retrieve(
+        self,
+        user_query: str,
+        collection_name: Optional[str],
+        collection_names: Optional[Sequence[str]],
+        filters: Optional[Union[MetadataFilter, MetadataFilterGroup]],
+        top_k: Optional[int],
+        rerank_top_n: Optional[int],
+    ) -> RetrievalResult:
+        """
+        Route to multi-collection pooling when 2+ collections are requested,
+        otherwise use the unchanged single-collection retrieve().
+        """
+        names = self._resolve_collection_names(collection_names)
+        if len(names) >= 2:
+            return self.retrieval_service.retrieve_multi(
+                query=user_query,
+                collection_names=names,
+                filters=filters,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+        single = names[0] if names else collection_name
+        return self.retrieval_service.retrieve(
+            query=user_query,
+            collection_name=single,
+            filters=filters,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+        )
+    
+    async def _aroute_retrieve(
+        self,
+        user_query: str,
+        collection_name: Optional[str],
+        collection_names: Optional[Sequence[str]],
+        filters: Optional[Union[MetadataFilter, MetadataFilterGroup]],
+        top_k: Optional[int],
+        rerank_top_n: Optional[int],
+    ) -> RetrievalResult:
+        """Async version of _route_retrieve."""
+        names = self._resolve_collection_names(collection_names)
+        if len(names) >= 2:
+            return await self.retrieval_service.aretrieve_multi(
+                query=user_query,
+                collection_names=names,
+                filters=filters,
+                top_k=top_k,
+                rerank_top_n=rerank_top_n,
+            )
+        single = names[0] if names else collection_name
+        return await self.retrieval_service.aretrieve(
+            query=user_query,
+            collection_name=single,
+            filters=filters,
+            top_k=top_k,
+            rerank_top_n=rerank_top_n,
+        )
+    
     # ==================== Core Query Methods ====================
     
     def query(
         self,
         user_query: str,
         collection_name: Optional[str] = None,
+        collection_names: Optional[Sequence[str]] = None,
         session: Optional[ChatSession] = None,
         system_prompt: Optional[str] = None,
         filters: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
@@ -272,9 +349,10 @@ class RAGService:
             RAGResponse with answer, sources, and metadata
         """
         # Stage 1: Retrieve
-        retrieval_result = self.retrieval_service.retrieve(
-            query=user_query,
+        retrieval_result = self._route_retrieve(
+            user_query=user_query,
             collection_name=collection_name,
+            collection_names=collection_names,
             filters=filters,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
@@ -319,6 +397,7 @@ class RAGService:
         self,
         user_query: str,
         collection_name: Optional[str] = None,
+        collection_names: Optional[Sequence[str]] = None,
         session: Optional[ChatSession] = None,
         system_prompt: Optional[str] = None,
         filters: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
@@ -345,9 +424,10 @@ class RAGService:
             RAGResponse with answer, sources, and metadata
         """
         # Stage 1: Async retrieve
-        retrieval_result = await self.retrieval_service.aretrieve(
-            query=user_query,
+        retrieval_result = await self._aroute_retrieve(
+            user_query=user_query,
             collection_name=collection_name,
+            collection_names=collection_names,
             filters=filters,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
@@ -392,6 +472,7 @@ class RAGService:
         self,
         user_query: str,
         collection_name: Optional[str] = None,
+        collection_names: Optional[Sequence[str]] = None,
         session: Optional[ChatSession] = None,
         system_prompt: Optional[str] = None,
         filters: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
@@ -421,9 +502,10 @@ class RAGService:
             Tuple of (RetrievalResult, Iterator[str] for streaming chunks)
         """
         # Stage 1: Retrieve
-        retrieval_result = self.retrieval_service.retrieve(
-            query=user_query,
+        retrieval_result = self._route_retrieve(
+            user_query=user_query,
             collection_name=collection_name,
+            collection_names=collection_names,
             filters=filters,
             top_k=top_k,
             rerank_top_n=rerank_top_n,
@@ -452,6 +534,7 @@ class RAGService:
         self,
         user_query: str,
         collection_name: Optional[str] = None,
+        collection_names: Optional[Sequence[str]] = None,
         session: Optional[ChatSession] = None,
         system_prompt: Optional[str] = None,
         filters: Optional[Union[MetadataFilter, MetadataFilterGroup]] = None,
@@ -467,9 +550,10 @@ class RAGService:
             Tuple of (RetrievalResult, AsyncIterator[str] for streaming chunks)
         """
         # Stage 1: Async retrieve
-        retrieval_result = await self.retrieval_service.aretrieve(
-            query=user_query,
+        retrieval_result = await self._aroute_retrieve(
+            user_query=user_query,
             collection_name=collection_name,
+            collection_names=collection_names,
             filters=filters,
             top_k=top_k,
             rerank_top_n=rerank_top_n,

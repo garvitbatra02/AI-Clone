@@ -314,6 +314,156 @@ class TestRetrievalService:
         mock_vectordb_service.async_search.assert_called_once()
 
 
+# ==================== Multi-Collection Retrieval Tests ====================
+
+
+def make_scored_results(prefix: str, scores: list[float]) -> list[SearchResult]:
+    """Create SearchResults with explicit scores for a given collection prefix."""
+    return [
+        SearchResult(
+            id=f"{prefix}_{i}",
+            content=f"{prefix} chunk {i}",
+            score=s,
+            metadata={"source": f"{prefix}.pdf"},
+        )
+        for i, s in enumerate(scores)
+    ]
+
+
+class TestRetrievalServiceMulti:
+    """Tests for the additive multi-collection retrieval methods."""
+
+    def _service(self, config: RetrievalConfig) -> tuple[RetrievalService, MagicMock]:
+        mock_vdb = MagicMock()
+        mock_vdb.embeddings.embed_query.return_value = [0.1, 0.2, 0.3]
+        mock_vdb.collection_exists.return_value = True
+        service = RetrievalService(config=config, vectordb_service=mock_vdb)
+        # Disable reranker so we observe the raw pooled ordering
+        service._reranker = None
+        service._reranker_initialized = True
+        return service, mock_vdb
+
+    def test_pool_merges_and_sorts_by_global_score(self):
+        """Candidates from N collections are merged and globally score-ordered."""
+        config = RetrievalConfig(rerank_enabled=False, top_k=10)
+        service, mock_vdb = self._service(config)
+
+        per_collection = {
+            "projects": make_scored_results("projects", [0.91, 0.55]),
+            "notes": make_scored_results("notes", [0.82, 0.40]),
+        }
+        mock_vdb.search_by_vector.side_effect = (
+            lambda embedding, k, filters, collection_name, score_threshold: per_collection[collection_name]
+        )
+
+        result = service.retrieve_multi(
+            query="q", collection_names=["projects", "notes"],
+        )
+
+        # 4 pooled candidates, ordered by global score (not by collection)
+        assert result.total_candidates == 4
+        scores = [c.score for c in result.source_chunks]
+        assert scores == sorted(scores, reverse=True)
+        assert result.source_chunks[0].id == "projects_0"  # 0.91
+        assert result.source_chunks[1].id == "notes_0"      # 0.82
+        assert result.collections == ["projects", "notes"]
+
+    def test_no_per_collection_quota_strong_collection_keeps_all(self):
+        """A collection holding all the best chunks keeps all of them."""
+        config = RetrievalConfig(rerank_enabled=False, top_k=10, max_pool=80)
+        service, mock_vdb = self._service(config)
+
+        strong = make_scored_results("strong", [0.99, 0.98, 0.97, 0.96])
+        weak = make_scored_results("weak", [0.30, 0.20])
+        per = {"strong": strong, "weak": weak}
+        mock_vdb.search_by_vector.side_effect = (
+            lambda embedding, k, filters, collection_name, score_threshold: per[collection_name]
+        )
+
+        result = service.retrieve_multi(
+            query="q", collection_names=["strong", "weak"],
+        )
+
+        # All 4 strong chunks survive ahead of the weak ones — no quota dropped them
+        top_ids = [c.id for c in result.source_chunks[:4]]
+        assert top_ids == ["strong_0", "strong_1", "strong_2", "strong_3"]
+
+    def test_max_pool_caps_pool_by_global_score(self):
+        """The pool is truncated to max_pool, keeping the highest scores."""
+        config = RetrievalConfig(rerank_enabled=False, top_k=50, max_pool=3)
+        service, mock_vdb = self._service(config)
+
+        a = make_scored_results("a", [0.9, 0.5, 0.1])
+        b = make_scored_results("b", [0.8, 0.4, 0.2])
+        per = {"a": a, "b": b}
+        mock_vdb.search_by_vector.side_effect = (
+            lambda embedding, k, filters, collection_name, score_threshold: per[collection_name]
+        )
+
+        result = service.retrieve_multi(query="q", collection_names=["a", "b"])
+
+        assert result.total_candidates == 6      # all pooled before cap
+        assert len(result.source_chunks) == 3     # capped
+        assert [c.score for c in result.source_chunks] == [0.9, 0.8, 0.5]
+
+    def test_missing_collection_is_skipped(self):
+        """A missing collection is skipped, not fatal."""
+        config = RetrievalConfig(rerank_enabled=False, top_k=10)
+        service, mock_vdb = self._service(config)
+        mock_vdb.collection_exists.side_effect = lambda name: name == "exists"
+        mock_vdb.search_by_vector.return_value = make_scored_results("exists", [0.7, 0.6])
+
+        result = service.retrieve_multi(
+            query="q", collection_names=["exists", "ghost"],
+        )
+
+        assert result.total_candidates == 2
+        assert result.collections == ["exists", "ghost"]
+
+    def test_embeds_query_once(self):
+        """The query embedding is computed once and reused across collections."""
+        config = RetrievalConfig(rerank_enabled=False, top_k=10)
+        service, mock_vdb = self._service(config)
+        mock_vdb.search_by_vector.return_value = make_scored_results("c", [0.5])
+
+        service.retrieve_multi(query="q", collection_names=["a", "b", "c"])
+
+        assert mock_vdb.embeddings.embed_query.call_count == 1
+        assert mock_vdb.search_by_vector.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_aretrieve_multi_concurrent(self):
+        """Async multi searches every collection and pools the results."""
+        config = RetrievalConfig(rerank_enabled=False, top_k=10)
+        mock_vdb = MagicMock()
+        mock_vdb.embeddings.async_embed_query = AsyncMock(return_value=[0.1, 0.2])
+        mock_vdb.async_collection_exists = AsyncMock(return_value=True)
+
+        per = {
+            "a": make_scored_results("a", [0.9, 0.3]),
+            "b": make_scored_results("b", [0.85, 0.2]),
+        }
+
+        async def _search(embedding, k, filters, collection_name, score_threshold):
+            return per[collection_name]
+
+        mock_vdb.async_search_by_vector = AsyncMock(side_effect=_search)
+
+        service = RetrievalService(config=config, vectordb_service=mock_vdb)
+        service._reranker = None
+        service._reranker_initialized = True
+
+        result = await service.aretrieve_multi(
+            query="q", collection_names=["a", "b"],
+        )
+
+        assert result.total_candidates == 4
+        assert result.source_chunks[0].id == "a_0"   # 0.9 global top
+        assert result.source_chunks[1].id == "b_0"   # 0.85
+        mock_vdb.embeddings.async_embed_query.assert_awaited_once()
+        assert mock_vdb.async_search_by_vector.await_count == 2
+
+
 # ==================== RAGService Tests ====================
 
 
