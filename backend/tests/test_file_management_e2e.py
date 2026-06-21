@@ -291,6 +291,97 @@ def test_08_text_upload_has_canonical_fields():
     _print("✅ TEST 8 PASSED")
 
 
+def test_09_file_size_bytes_populated():
+    """Every listed file reports a non-null, positive file_size_bytes."""
+    print("\n" + "=" * 70)
+    print("  TEST 9: file_size_bytes is populated for all files")
+    print("=" * 70)
+
+    r = client.get(f"/api/assets/collections/{COLLECTION}/files")
+    assert r.status_code == 200, f"{r.status_code}: {r.text}"
+    files = r.json()["files"]
+    assert files, "expected at least one file"
+    for f in files:
+        assert f["file_size_bytes"] is not None, (
+            f"file_size_bytes is null for {f['source']}"
+        )
+        assert f["file_size_bytes"] > 0, (
+            f"file_size_bytes should be > 0 for {f['source']}"
+        )
+        _print(f"{Path(f['source']).name}: {f['file_size_bytes']} bytes")
+    _print("✅ TEST 9 PASSED")
+
+
+def test_10_multipart_upload_with_tags_and_metadata():
+    """Multipart /file accepts tags + metadata; tags surface in the file list."""
+    print("\n" + "=" * 70)
+    print("  TEST 10: Multipart upload with tags + metadata")
+    print("=" * 70)
+
+    tag_collection = f"tags_test_{RUN_ID}"
+    with open(TXT_FILE, "rb") as fh:
+        r = client.post(
+            "/api/assets/uploads/file",
+            files={"file": ("my all details.txt", fh, "text/plain")},
+            data={
+                "collection_name": tag_collection,
+                "tags": '["projects", "resume"]',
+                "metadata": '{"category": "personal"}',
+            },
+        )
+    assert r.status_code == 200, f"{r.status_code}: {r.text}"
+    assert r.json()["success"] is True
+    _print(f"Uploaded with tags; {r.json()['total_chunks']} chunks")
+
+    # Tags surface in the file list
+    r = client.get(f"/api/assets/collections/{tag_collection}/files")
+    assert r.status_code == 200, f"{r.status_code}: {r.text}"
+    files = r.json()["files"]
+    assert len(files) == 1, f"expected 1 file, got {len(files)}"
+    f = files[0]
+    assert f["tags"] == ["projects", "resume"], f"unexpected tags: {f['tags']}"
+    assert f["file_size_bytes"] and f["file_size_bytes"] > 0
+    assert f["source"] == "my all details.txt", (
+        f"source should be original filename, got {f['source']}"
+    )
+    _print(f"File list tags={f['tags']} size={f['file_size_bytes']}")
+
+    # Custom metadata persists on the chunks
+    r = client.get(
+        f"/api/assets/collections/{tag_collection}/files/chunks",
+        params={"source": "my all details.txt"},
+    )
+    assert r.status_code == 200, f"{r.status_code}: {r.text}"
+    first_meta = r.json()["chunks"][0]["metadata"]
+    assert first_meta.get("category") == "personal", (
+        f"custom metadata not persisted: {first_meta}"
+    )
+    assert first_meta.get("tags") == ["projects", "resume"]
+    _print("✅ TEST 10 PASSED — tags + metadata persisted")
+
+
+def test_11_comma_separated_tags():
+    """Tags can also be supplied as a comma-separated string."""
+    print("\n" + "=" * 70)
+    print("  TEST 11: Comma-separated tags")
+    print("=" * 70)
+
+    coll = f"csv_tags_{RUN_ID}"
+    with open(CSV_FILE, "rb") as fh:
+        r = client.post(
+            "/api/assets/uploads/file",
+            files={"file": ("Personal_TrainingData.csv", fh, "text/csv")},
+            data={"collection_name": coll, "tags": "training, data, csv"},
+        )
+    assert r.status_code == 200, f"{r.status_code}: {r.text}"
+
+    r = client.get(f"/api/assets/collections/{coll}/files")
+    assert r.status_code == 200
+    f = r.json()["files"][0]
+    assert f["tags"] == ["training", "data", "csv"], f"got {f['tags']}"
+    _print(f"✅ TEST 11 PASSED — comma tags parsed: {f['tags']}")
+
+
 def main():
     tests = [
         test_01_setup_upload_two_files,
@@ -301,6 +392,9 @@ def main():
         test_06_delete_single_file,
         test_07_delete_missing_file_is_idempotent,
         test_08_text_upload_has_canonical_fields,
+        test_09_file_size_bytes_populated,
+        test_10_multipart_upload_with_tags_and_metadata,
+        test_11_comma_separated_tags,
     ]
     passed = 0
     for t in tests:

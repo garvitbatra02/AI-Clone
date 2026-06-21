@@ -14,9 +14,10 @@ Provides two parallel families of endpoints:
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
@@ -36,6 +37,62 @@ from AssetUploadService.Server.models.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/assets/uploads", tags=["Asset Uploads"])
+
+
+def _parse_metadata_field(raw: Optional[str]) -> Dict[str, Any]:
+    """Parse the optional ``metadata`` form field (a JSON object string)."""
+    if not raw or not raw.strip():
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"metadata must be a valid JSON object: {e}"},
+        )
+    if not isinstance(parsed, dict):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "metadata must be a JSON object (key/value pairs)"},
+        )
+    return parsed
+
+
+def _parse_tags_field(raw: Optional[str]) -> List[str]:
+    """
+    Parse the optional ``tags`` form field.
+
+    Accepts either a JSON array (``["a","b"]``) or a comma-separated string
+    (``a, b``). Returns a de-duplicated, order-preserving list of non-empty tags.
+    """
+    if not raw or not raw.strip():
+        return []
+    values: List[str]
+    stripped = raw.strip()
+    if stripped.startswith("["):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as e:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"tags must be a valid JSON array: {e}"},
+            )
+        if not isinstance(parsed, list):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "tags JSON must be an array of strings"},
+            )
+        values = [str(t).strip() for t in parsed]
+    else:
+        values = [t.strip() for t in stripped.split(",")]
+
+    seen: set = set()
+    ordered: List[str] = []
+    for t in values:
+        if t and t not in seen:
+            seen.add(t)
+            ordered.append(t)
+    return ordered
 
 
 def _get_dashboard_service():
@@ -130,7 +187,10 @@ async def preview_upload(
     summary="Upload a file",
     description=(
         "Accepts a multipart file upload, auto-detects the file type, "
-        "chunks, embeds, and stores it in the specified (or default) collection."
+        "chunks, embeds, and stores it in the specified (or default) collection. "
+        "Optionally accepts a JSON `metadata` object and/or `tags` (JSON array or "
+        "comma-separated) which are persisted onto every stored chunk and shown "
+        "in the collection's file list."
     ),
 )
 async def upload_file(
@@ -138,16 +198,42 @@ async def upload_file(
     collection_name: Optional[str] = Form(
         default=None, description="Target collection name",
     ),
+    metadata: Optional[str] = Form(
+        default=None,
+        description="Optional JSON object of extra metadata to attach to the file.",
+    ),
+    tags: Optional[str] = Form(
+        default=None,
+        description="Optional tags: a JSON array (e.g. [\"projects\"]) or a "
+                    "comma-separated string (e.g. projects,research).",
+    ),
 ) -> UploadFileResponse:
     """Upload a file to the vector database."""
     try:
         service = _get_dashboard_service()
         content = await file.read()
         
+        # Merge metadata object + convenience tags field
+        meta = _parse_metadata_field(metadata)
+        tag_list = _parse_tags_field(tags)
+        if tag_list:
+            existing = meta.get("tags") or []
+            if not isinstance(existing, list):
+                existing = [existing]
+            merged: list = []
+            seen: set = set()
+            for t in [*existing, *tag_list]:
+                t = str(t).strip()
+                if t and t not in seen:
+                    seen.add(t)
+                    merged.append(t)
+            meta["tags"] = merged
+        
         result = await service.upload_uploaded_file(
             file_content=content,
             original_filename=file.filename or "unknown",
             collection_name=collection_name,
+            metadata=meta or None,
         )
         
         if not result.success:

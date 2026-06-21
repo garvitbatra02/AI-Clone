@@ -265,6 +265,7 @@ class AssetUploadService:
         source: str,
         file_type: Optional[str] = None,
         file_size_bytes: Optional[int] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         Stamp consistent file-level fields onto every chunk's payload.
@@ -280,11 +281,19 @@ class AssetUploadService:
           - ``uploaded_at``     ISO-8601 timestamp of this upload
           - ``file_size_bytes`` size on disk (when known)
 
+        Any user-supplied ``extra`` fields (e.g. ``tags`` and other custom
+        metadata) are applied first so the canonical fields above always win.
         Existing keys from the chunker (e.g. ``source_file``, ``chunk_index``)
         are preserved.
         """
         uploaded_at = datetime.now(timezone.utc).isoformat()
+        clean_extra = {
+            k: v for k, v in (extra or {}).items()
+            if v is not None and k != "original_filename"
+        }
         for chunk in chunks:
+            if clean_extra:
+                chunk.metadata.update(clean_extra)
             chunk.metadata["source"] = source
             chunk.metadata["uploaded_at"] = uploaded_at
             if file_type:
@@ -304,9 +313,14 @@ class AssetUploadService:
         """
         Group scrolled (id, payload) rows into per-file summaries.
 
-        Returns one entry per distinct source, with chunk counts and the
-        best-available file_type / uploaded_at / file_size_bytes, sorted by
-        upload time (newest first).
+        Returns one entry per distinct source with chunk counts and the
+        best-available file_type / uploaded_at / file_size_bytes / tags,
+        sorted by upload time (newest first).
+
+        ``file_size_bytes`` prefers the exact on-disk size stamped at upload
+        time. For legacy data uploaded before that field existed, it falls
+        back to the summed UTF-8 byte length of the file's chunk contents
+        (the indexed content size) so the column is never null.
         """
         files: Dict[str, Dict[str, Any]] = {}
         for _id, payload in rows:
@@ -319,6 +333,8 @@ class AssetUploadService:
                     "file_type": None,
                     "uploaded_at": None,
                     "file_size_bytes": None,
+                    "tags": None,
+                    "_content_bytes": 0,
                 }
                 files[source] = entry
 
@@ -331,12 +347,24 @@ class AssetUploadService:
                 )
             if entry["file_size_bytes"] is None:
                 entry["file_size_bytes"] = payload.get("file_size_bytes")
+            if entry["tags"] is None:
+                tags = payload.get("tags")
+                if tags:
+                    entry["tags"] = tags
+            # Accumulate content size as a fallback for legacy data
+            content = payload.get("content")
+            if content:
+                entry["_content_bytes"] += len(content.encode("utf-8"))
 
-        return sorted(
-            files.values(),
-            key=lambda f: f["uploaded_at"] or "",
-            reverse=True,
-        )
+        result: List[Dict[str, Any]] = []
+        for entry in files.values():
+            if entry["file_size_bytes"] is None:
+                entry["file_size_bytes"] = entry["_content_bytes"]
+            entry.pop("_content_bytes", None)
+            result.append(entry)
+
+        result.sort(key=lambda f: f["uploaded_at"] or "", reverse=True)
+        return result
 
     def _embed_chunks(
         self,
@@ -419,6 +447,7 @@ class AssetUploadService:
                 source=(metadata or {}).get("original_filename") or str(path),
                 file_type=file_type,
                 file_size_bytes=path.stat().st_size if path.exists() else None,
+                extra=metadata,
             )
             
             # Generate embeddings
@@ -488,6 +517,7 @@ class AssetUploadService:
                 source=(metadata or {}).get("original_filename") or str(path),
                 file_type=file_type,
                 file_size_bytes=path.stat().st_size if path.exists() else None,
+                extra=metadata,
             )
             
             await self._async_embed_chunks(chunks)

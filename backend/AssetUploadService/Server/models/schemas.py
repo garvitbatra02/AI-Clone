@@ -92,7 +92,14 @@ class FileInfoSchema(BaseModel):
         default=None, description="ISO-8601 timestamp of when the file was uploaded",
     )
     file_size_bytes: Optional[int] = Field(
-        default=None, description="Original file size in bytes (when known)",
+        default=None,
+        description="File size in bytes. Exact on-disk size for files uploaded "
+                    "after size tracking was added; for older data, the summed "
+                    "byte length of the indexed content.",
+    )
+    tags: Optional[List[str]] = Field(
+        default=None,
+        description="User-provided tags attached to the file at upload time.",
     )
 
     class Config:
@@ -103,6 +110,7 @@ class FileInfoSchema(BaseModel):
                 "file_type": "pdf",
                 "uploaded_at": "2026-06-21T10:30:00+00:00",
                 "file_size_bytes": 245000,
+                "tags": ["projects", "research"],
             }
         }
 
