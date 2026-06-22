@@ -1,0 +1,27 @@
+# Python virtualenv and caches
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Secrets - NEVER ship these into the image (use Azure secrets instead)
+.env
+.env.*
+*.env
+
+# Tests, examples, docs - not needed at runtime
+tests/
+examples/
+*.md
+
+# Local tooling / editor noise
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+*.log

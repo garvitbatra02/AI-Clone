@@ -1,0 +1,15 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / workspace
+*.code-workspace
+.idea/
+*.swp
+
+# Local test fixtures containing personal data (do not commit)
+backend/tests/document_loaders_tests/*.pdf
+backend/tests/document_loaders_tests/*.csv
+backend/tests/document_loaders_tests/*.json
+backend/tests/document_loaders_tests/*.docx
+backend/tests/document_loaders_tests/*.txt

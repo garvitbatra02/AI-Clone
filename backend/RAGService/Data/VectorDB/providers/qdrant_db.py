@@ -76,6 +76,7 @@ class QdrantVectorDB(BaseVectorDB):
     
     ENV_API_KEY_VAR: str = "QDRANT_API_KEY"
     ENV_URL_VAR: str = "QDRANT_URL"
+    ENV_PREFER_GRPC_VAR: str = "QDRANT_PREFER_GRPC"
     
     _client: QdrantClient
     _async_client: AsyncQdrantClient
@@ -91,6 +92,16 @@ class QdrantVectorDB(BaseVectorDB):
         # Resolve url and api_key: explicit config takes priority, then env vars
         url = self.config.url or os.environ.get(self.ENV_URL_VAR)
         api_key = self.config.api_key or os.environ.get(self.ENV_API_KEY_VAR)
+
+        # Resolve transport: QDRANT_PREFER_GRPC env var overrides config when set.
+        # Defaults to config.prefer_grpc. Setting it to false forces HTTPS/REST,
+        # which is the most reliable transport for Qdrant Cloud across
+        # environments (gRPC name resolution can mis-parse URLs in some
+        # containerized Linux setups).
+        prefer_grpc = self.config.prefer_grpc
+        grpc_env = os.environ.get(self.ENV_PREFER_GRPC_VAR)
+        if grpc_env is not None:
+            prefer_grpc = grpc_env.strip().lower() in ("1", "true", "yes", "on")
         
         if in_memory:
             # In-memory mode for testing
@@ -106,13 +117,13 @@ class QdrantVectorDB(BaseVectorDB):
                 url=url,
                 api_key=api_key,
                 timeout=self.config.timeout,
-                prefer_grpc=self.config.prefer_grpc,
+                prefer_grpc=prefer_grpc,
             )
             self._async_client = AsyncQdrantClient(
                 url=url,
                 api_key=api_key,
                 timeout=self.config.timeout,
-                prefer_grpc=self.config.prefer_grpc,
+                prefer_grpc=prefer_grpc,
             )
         else:
             # Default to in-memory if nothing specified
